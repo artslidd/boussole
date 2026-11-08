@@ -1,0 +1,1 @@
+{"type":"round_started","round_index":2,"total_rounds":3,"max_tries":6,"hints":[{"city":"Amiens","bearing_deg":330.5},{"city":"Belfort","bearing_deg":48.0},{"city":"Bastia","bearing_deg":128.5},{"city":"Perpignan","bearing_deg":201.0},{"city":"Angers","bearing_deg":275.5}],"timer":{"kind":"turn","player_id":2,"remaining_ms":45000}}
