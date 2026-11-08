@@ -13,14 +13,40 @@ pub trait Clipboard {
 }
 
 /// The operating system's clipboard.
-#[derive(Debug, Default)]
-pub struct SystemClipboard;
+///
+/// One `arboard::Clipboard` is kept for the life of the app: on Linux/X11 without a clipboard
+/// manager the text is served by that instance and disappears when it is dropped, so creating a
+/// new one for every copy would say "Copié" and paste nothing. It is created on the first copy
+/// and replaced if a copy fails (the connection to the display server may have gone away).
+#[derive(Default)]
+pub struct SystemClipboard {
+    instance: RefCell<Option<arboard::Clipboard>>,
+}
 
 impl Clipboard for SystemClipboard {
     fn set_text(&self, text: &str) -> Result<(), String> {
-        arboard::Clipboard::new()
-            .and_then(|mut clipboard| clipboard.set_text(text.to_owned()))
-            .map_err(|error| error.to_string())
+        let mut instance = self.instance.borrow_mut();
+        let mut last_error = String::new();
+        // A kept instance that went stale gets one fresh start.
+        for _ in 0..2 {
+            if instance.is_none() {
+                match arboard::Clipboard::new() {
+                    Ok(clipboard) => *instance = Some(clipboard),
+                    Err(error) => return Err(error.to_string()),
+                }
+            }
+            let Some(clipboard) = instance.as_mut() else {
+                continue;
+            };
+            match clipboard.set_text(text.to_owned()) {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    last_error = error.to_string();
+                    *instance = None;
+                }
+            }
+        }
+        Err(last_error)
     }
 }
 

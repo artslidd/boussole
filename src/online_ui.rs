@@ -195,7 +195,7 @@ impl OnlineUi {
         let inner = Rc::new(Inner {
             window: window.as_weak(),
             host: RefCell::new(Arc::new(UnavailableHost)),
-            clipboard: RefCell::new(Rc::new(SystemClipboard)),
+            clipboard: RefCell::new(Rc::new(SystemClipboard::default())),
             clock: RefCell::new(clock),
             net_tweak: RefCell::new(Box::new(|_| {})),
             inbox: Arc::new(Mutex::new(VecDeque::new())),

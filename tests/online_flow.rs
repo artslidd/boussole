@@ -1128,8 +1128,9 @@ fn a_slow_server_shutdown_never_blocks_the_window() {
     // Stopping the server (goodbyes to every client, killing cloudflared) can take seconds.
     let ui = ui(1000, 760);
     let server = MockServer::start();
-    let host =
-        Arc::new(FakeHost::ok(host_info(&server)).with_stop_delay(Duration::from_millis(1_500)));
+    // A long stop, so that "the UI did not wait for it" has a wide margin even on a loaded
+    // machine (rendering and settling the click take a few hundred ms at most).
+    let host = Arc::new(FakeHost::ok(host_info(&server)).with_stop_delay(Duration::from_secs(5)));
     ui.app.online().set_host(host.clone());
     ui.open_menu();
     ui.fill("Pseudo", "Alice");
@@ -1145,7 +1146,7 @@ fn a_slow_server_shutdown_never_blocks_the_window() {
     let before = Instant::now();
     ui.button("Fermer la partie");
     assert!(
-        before.elapsed() < Duration::from_millis(800),
+        before.elapsed() < Duration::from_millis(2_500),
         "leaving took {:?}: the UI thread waited for the server to stop",
         before.elapsed()
     );
@@ -1163,7 +1164,7 @@ fn a_slow_server_shutdown_never_blocks_the_window() {
     assert!(
         ui.app
             .online()
-            .wait_for_pending_stops(Duration::from_secs(5))
+            .wait_for_pending_stops(Duration::from_secs(15))
     );
     assert_eq!(host.stops(), 1);
 }
@@ -1447,17 +1448,9 @@ fn eight_players_fit_in_a_coop_round_at_the_minimum_window_size() {
     assert!(e.absolute_position().y + e.size().height <= 600.0 - 46.0 - 168.0);
 }
 
-#[test]
-fn eight_players_fit_in_the_results_at_the_minimum_window_size() {
-    let (ui, server) = joined_at(800, 600, course_config(), eight_players());
-    start_round(
-        &server,
-        course_config(),
-        eight_players(),
-        round_started(fixture!("round_started_course_facile")),
-    );
-    ui.wait("the round", |ui| ui.screen() == OnlineScreen::Round);
-    let results = eight_players()
+/// What eight players did in one round: half of them found the city.
+fn eight_player_results() -> Vec<boussole_protocol::PlayerRoundResult> {
+    eight_players()
         .iter()
         .map(|p| boussole_protocol::PlayerRoundResult {
             player_id: p.id,
@@ -1473,7 +1466,20 @@ fn eight_players_fit_in_the_results_at_the_minimum_window_size() {
             points: if p.id % 2 == 0 { 400 } else { 0 },
             total: 400,
         })
-        .collect();
+        .collect()
+}
+
+#[test]
+fn eight_players_fit_in_the_results_at_the_minimum_window_size() {
+    let (ui, server) = joined_at(800, 600, course_config(), eight_players());
+    start_round(
+        &server,
+        course_config(),
+        eight_players(),
+        round_started(fixture!("round_started_course_facile")),
+    );
+    ui.wait("the round", |ui| ui.screen() == OnlineScreen::Round);
+    let results = eight_player_results();
     server.send(ServerMsg::RoundEnded(boussole_protocol::RoundEnded {
         round_index: 1,
         total_rounds: 3,
@@ -1491,6 +1497,72 @@ fn eight_players_fit_in_the_results_at_the_minimum_window_size() {
         "the 8th result row is above the status strip"
     );
     assert_inside(&ui, "Essai 6 : libre", 800.0, 600.0);
+}
+
+#[test]
+fn eight_players_fit_in_the_final_ranking_at_the_minimum_window_size() {
+    let (ui, server) = joined_at(800, 600, course_config(), eight_players());
+    start_round(
+        &server,
+        course_config(),
+        eight_players(),
+        round_started(fixture!("round_started_course_facile")),
+    );
+    ui.wait("the round", |ui| ui.screen() == OnlineScreen::Round);
+    server.send(ServerMsg::RoundEnded(boussole_protocol::RoundEnded {
+        round_index: 3,
+        total_rounds: 3,
+        secret: "Besançon".into(),
+        found_by: None,
+        results: eight_player_results(),
+        next_round_in_ms: None,
+    }));
+    let ranking = eight_players()
+        .iter()
+        .enumerate()
+        .map(|(i, p)| boussole_protocol::RankEntry {
+            player_id: p.id,
+            nickname: p.nickname.clone(),
+            total: 1_900 - 100 * i as u32,
+            rank: i as u32 + 1,
+            solved_rounds: 3,
+        })
+        .collect();
+    server.send(ServerMsg::MatchEnded(boussole_protocol::MatchEnded {
+        mode: Mode::Course,
+        ranking,
+    }));
+    server.send(lobby_msg(course_config(), eight_players()));
+    ui.wait("the last result", |ui| ui.screen() == OnlineScreen::Result);
+    ui.key(Key::Return);
+    assert_eq!(ui.screen(), OnlineScreen::Podium);
+    assert_eq!(ui.online().get_ranking().row_count(), 8);
+
+    // every row, and the way back, lie inside the window; the button is below the last row
+    let last = ui.online().get_ranking().row_data(7).unwrap();
+    let label = format!(
+        "Rang {} : {}{}, {} points, {}",
+        last.rank,
+        last.name,
+        if last.me { " (vous)" } else { "" },
+        last.total,
+        last.detail
+    );
+    let row = ui.element(&label, Some(AccessibleRole::ListItem));
+    let back = ui.element("Retour au salon", Some(AccessibleRole::Button));
+    let (row_p, row_s) = (row.absolute_position(), row.size());
+    let (back_p, back_s) = (back.absolute_position(), back.size());
+    assert!(
+        row_p.y + row_s.height <= back_p.y + 0.5,
+        "the 8th row ({row_p:?} {row_s:?}) overlaps \"Retour au salon\" ({back_p:?} {back_s:?})"
+    );
+    assert!(
+        back_p.y + back_s.height <= 600.0 + 0.5 && back_p.x + back_s.width <= 800.0 + 0.5,
+        "\"Retour au salon\" at {back_p:?} size {back_s:?} is outside the 800×600 window"
+    );
+    // and it works from there
+    ui.button("Retour au salon");
+    assert_eq!(ui.screen(), OnlineScreen::Lobby);
 }
 
 // --- rounds ---------------------------------------------------------------------------------

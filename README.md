@@ -88,8 +88,12 @@ Up to 8 players, in two modes chosen by the host in the lobby: **Course** (every
 the same hidden city, with private feedback; points for fewer tries and speed; a live scoreboard
 shows each player's tries but never a city name) and **Coopération** (one shared round: the
 players take turns, six tries for the whole team, everyone sees every guess and who made it).
-The hidden city never reaches a client before the round ends: the server decides, the client
-only draws (see [`docs/protocol.md`](docs/protocol.md)).
+The hidden city's name never reaches a client before the round ends: the server decides, the
+client only draws (see [`docs/protocol.md`](docs/protocol.md)). This is a game between friends,
+not a tournament, though: the hint bearings every client receives would let a modified client
+work out the secret, and with **Héberger une partie** the server runs on the host's own computer.
+What the server does guarantee is fair scoring, turns and timers: guesses are judged and
+timed there, never by the client.
 
 From the start screen choose **Jouer en ligne**, type a **Pseudo** (1 to 16 characters), then:
 
