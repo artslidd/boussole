@@ -784,19 +784,36 @@ mod tests {
     }
 
     #[test]
-    fn facile_distance_matches_the_rounded_core_distance() {
-        for city in CITIES.iter().filter(|c| c.reference) {
-            let hint = Hint {
-                city,
-                bearing_deg: 10.0,
-                distance_km: city.lat * 7.3 + city.lon * 11.1 + 300.0,
-            };
-            let label = format_hint_label(&hint, Difficulty::Facile);
-            let expected = format!("{} · {} km", city.name, hint.distance_km.round() as u64);
-            if hint.distance_km < 999.5 {
-                assert_eq!(label, expected);
+    fn facile_labels_carry_the_rounded_real_distance_of_every_hint() {
+        use crate::game::Round;
+        let mut labels = 0;
+        for secret in CITIES {
+            for seed in 0..5 {
+                let round = Round::with_secret(secret, Difficulty::Facile, seed);
+                for hint in round.hints() {
+                    let label = format_hint_label(hint, Difficulty::Facile);
+                    assert_eq!(
+                        label,
+                        format!("{} · {} km", hint.city.name, format_km(hint.distance_km))
+                    );
+                    // Independent of the grouping code: once the group separators are removed,
+                    // the number is the core distance rounded to the nearest km.
+                    let km = label
+                        .rsplit(" · ")
+                        .next()
+                        .and_then(|tail| tail.strip_suffix(" km"))
+                        .expect("label ends with ` km`")
+                        .replace(' ', "");
+                    assert_eq!(
+                        km.parse::<u64>().expect("a whole number"),
+                        hint.distance_km.round() as u64,
+                        "{label}"
+                    );
+                    labels += 1;
+                }
             }
         }
+        assert_eq!(labels, CITIES.len() * 5 * Round::HINT_COUNT);
     }
 
     fn hint(bearing: f64, text: &str) -> HintLabel {

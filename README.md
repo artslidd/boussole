@@ -43,7 +43,8 @@ FemtoVG renderer; Qt is **not** required (the `fluent` std-widgets style is pinn
 1. Pick **Facile** or **Difficile**, then **Nouvelle partie**.
 2. Read the arrows: each one points from the hidden city towards a labelled city. The small
    compass in the corner gives the orientation (N is up).
-3. Type a city name. Suggestions appear above the field; pick one.
+3. Type a city name. Suggestions appear to the right of the field (in the history's place, so
+   the arrows stay visible); pick one.
 4. After each guess, the history shows the distance and an arrow pointing from your guess
    towards the hidden city. Find it within six tries.
 5. At the end the dial reveals the city. Choose a level and start again.
@@ -60,6 +61,9 @@ Everything can be done with the keyboard alone, or with the mouse alone.
 | Start / between rounds | `←` `→` choose the level, `Enter` starts, `Tab` reaches the button | click a level, click **Nouvelle partie** |
 | Guess field | type, `↑` `↓` move in the suggestions, `Enter` submits the highlighted one (or the exact name), `Esc` closes the list, `Esc` again empties the field, `↓` on an empty field lists every city | click a suggestion; the chevron on the right of the field lists every city (scroll with the wheel) |
 
+A held `Enter` never starts a round, and `Enter` is ignored for a moment after the result
+appears, so the *Bravo !* / *Perdu !* screen cannot be skipped by accident.
+
 ## Screenshots
 
 All of them are produced by the real `.slint` UI rendered headlessly, with fixed secrets and
@@ -69,12 +73,13 @@ seeds (`cargo run --release --example screenshots`, see below).
 |---|---|
 | ![Won](docs/screenshots/07-won.png) | ![Lost](docs/screenshots/09-lost.png) |
 
-| Autocomplete | Tightest board: Porto-Vecchio at 800 × 600 |
+| Autocomplete (the board stays readable) | Tightest board: Porto-Vecchio at 800 × 600 |
 |---|---|
 | ![Autocomplete](docs/screenshots/04-autocomplete.png) | ![Porto-Vecchio, minimum window](docs/screenshots/12-porto-vecchio-800x600.png) |
 
 More in [`docs/screenshots/`](docs/screenshots): start screen at the minimum size, the list of
-every city, the duplicate-guess notice, Facile at 800 × 600, the *À propos* box.
+every city, autocomplete at 800 × 600, the duplicate-guess notice, Facile at 800 × 600, the
+*À propos* box.
 
 ## Project layout
 

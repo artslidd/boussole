@@ -8,7 +8,7 @@ use boussole::game::{Difficulty, Round};
 use boussole::search::find_exact;
 
 // Canvas sizes (logical px) for the window sizes the app supports: the window minus the
-// header (52), status strip (46) and dock (156) of `ui/app.slint`.
+// header (52), status strip (46) and dock (168) of `ui/app.slint`.
 const CHROME_HEIGHT: f64 = 52.0 + 46.0 + 168.0;
 const SIZES: [(f64, f64); 4] = [
     (1000.0, 760.0 - CHROME_HEIGHT), // default window

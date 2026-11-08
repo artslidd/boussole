@@ -3,8 +3,9 @@
 import { Theme } from "theme.slint";
 import { GuessRow, Suggestion } from "types.slint";
 
-// The dropdown: up to eight rows visible, scrollable when the full list of cities is shown.
-// The highlighted row (keyboard) is scrolled into view.
+// The dropdown: at most five rows visible, scrollable (a typed query gives up to eight rows, the
+// full list of cities a hundred and twenty). The highlighted row is scrolled into view, also
+// when the list is reopened with the highlight somewhere down the list.
 component SuggestionList inherits Rectangle {
     in property <[Suggestion]> suggestions;
     in property <int> highlighted;
@@ -13,7 +14,7 @@ component SuggestionList inherits Rectangle {
     property <length> row-height: 34px;
     property <length> pad: 6px;
 
-    height: min(max(root.suggestions.length, 1), 8) * root.row-height + 2 * root.pad;
+    height: min(max(root.suggestions.length, 1), 5) * root.row-height + 2 * root.pad;
     border-radius: 10px;
     border-width: 2px;
     border-color: Theme.ink;
@@ -21,6 +22,10 @@ component SuggestionList inherits Rectangle {
     clip: true;
     accessible-role: list;
     accessible-label: "Suggestions de villes";
+
+    init => {
+        root.reveal();
+    }
 
     changed highlighted => {
         root.reveal();
@@ -95,8 +100,10 @@ component SuggestionList inherits Rectangle {
     }
 }
 
-// Text field + suggestion list that opens above the field. The field keeps the keyboard focus
-// while the list is open: Up/Down move the highlight, Enter submits it, Esc closes the list.
+// Text field + suggestion list. The list opens to the right of the field, over the guess
+// history, so it never covers the board and the hints stay readable while choosing. The field
+// keeps the keyboard focus while the list is open: Up/Down move the highlight, Enter submits
+// it, Esc closes the list.
 export component GuessInput inherits Rectangle {
     in-out property <string> text;
     in property <[Suggestion]> suggestions;
@@ -109,9 +116,9 @@ export component GuessInput inherits Rectangle {
     callback dismiss();
     // The chevron: show or hide the list of every city (for picking with the mouse).
     callback toggle-browse();
-    public function focus-input() {
-        input.focus();
-    }
+    // Window size, to place the list in the dock next to the field.
+    in property <length> window-width;
+    in property <length> window-height;
     height: 46px;
 
     init => {
@@ -222,10 +229,12 @@ export component GuessInput inherits Rectangle {
         }
     }
 
-    // Suggestions, opening upwards over the board
+    // Suggestions: right of the field (28 px gap, as between the dock's two columns), bottom
+    // aligned with the dock's content, up to the window's right padding (20 px).
     if root.open: SuggestionList {
-        y: -self.height - 8px;
-        width: 100%;
+        x: root.width + 28px;
+        y: root.window-height - 14px - root.absolute-position.y - self.height;
+        width: root.window-width - 20px - (root.absolute-position.x + root.width + 28px);
         suggestions: root.suggestions;
         highlighted: root.highlighted;
         text: root.text;

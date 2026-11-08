@@ -129,6 +129,11 @@ impl Autocomplete {
         self.highlighted = (self.highlighted as i32 + delta).rem_euclid(len) as usize;
     }
 
+    /// Close the list and keep the text (unlike [`Autocomplete::dismiss`], never empties the field).
+    pub fn close_list(&mut self) {
+        self.open = false;
+    }
+
     /// Esc: close the list but keep the text; Esc again (list already closed) empties the field.
     pub fn dismiss(&mut self) {
         if self.open {
@@ -139,11 +144,19 @@ impl Autocomplete {
     }
 
     /// The city a plain "Enter" would submit: the highlighted suggestion while the list is open,
-    /// otherwise the exact match of the typed name.
+    /// otherwise the exact match of the typed name. While the highlight is still on the default
+    /// first row, a name typed in full wins over the first suggestion, so a longer name that
+    /// starts with it (a "Saint-Quentin" next to a "Saint-Quentin-en-Yvelines") never takes its
+    /// place.
     pub fn resolve(&self) -> Result<&'static City, Rejection> {
         if self.open
             && let Some(city) = self.suggestions.get(self.highlighted)
         {
+            if self.highlighted == 0
+                && let Some(exact) = find_exact(&self.query)
+            {
+                return Ok(exact);
+            }
             return Ok(city);
         }
         if let Some(city) = find_exact(&self.query) {
@@ -291,7 +304,14 @@ impl Session {
                 self.autocomplete.clear();
                 self.notice = None;
             }
-            Submission::Rejected(rejection) => self.notice = Some(rejection),
+            Submission::Rejected(rejection) => {
+                self.notice = Some(rejection);
+                // The list takes the history's place while it is open: for a city already
+                // tried, close it so the history (which says how that guess went) is back.
+                if matches!(rejection, Rejection::AlreadyGuessed(_)) {
+                    self.autocomplete.close_list();
+                }
+            }
         }
         outcome
     }
@@ -443,6 +463,26 @@ mod tests {
         ac.move_highlight(1);
         let expected = ac.suggestions()[1].name;
         assert_eq!(ac.resolve().unwrap().name, expected);
+    }
+
+    #[test]
+    fn a_name_typed_in_full_beats_the_first_suggestion_until_the_highlight_moves() {
+        // The dataset has no city whose name starts another one, so build the list by hand:
+        // typing "lyon" while "Paris" happens to be the first suggestion.
+        let (paris, lyon) = (city("Paris"), city("Lyon"));
+        let mut ac = Autocomplete {
+            query: "lyon".to_owned(),
+            suggestions: vec![paris, lyon],
+            highlighted: 0,
+            open: true,
+        };
+        assert_eq!(ac.resolve().unwrap().name, "Lyon");
+        // once the player moved the highlight, their choice wins
+        ac.highlighted = 1;
+        ac.query = "paris".to_owned();
+        assert_eq!(ac.resolve().unwrap().name, "Lyon");
+        ac.highlighted = 0;
+        assert_eq!(ac.resolve().unwrap().name, "Paris");
     }
 
     #[test]

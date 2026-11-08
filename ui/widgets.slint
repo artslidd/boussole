@@ -23,9 +23,6 @@ export component FocusRing inherits Rectangle {
 export component PrimaryButton inherits Rectangle {
     in property <string> text;
     callback clicked();
-    public function focus-button() {
-        fs.focus();
-    }
     min-height: 46px;
     min-width: 180px;
     border-radius: 10px;
@@ -41,7 +38,10 @@ export component PrimaryButton inherits Rectangle {
     fs := FocusScope {
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
-                root.clicked();
+                // A held key (auto-repeat) must not press the button again.
+                if (!event.repeat) {
+                    root.clicked();
+                }
                 return accept;
             }
             return reject;
@@ -90,7 +90,10 @@ export component GhostButton inherits Rectangle {
     fs := FocusScope {
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
-                root.clicked();
+                // A held key (auto-repeat) must not press the button again.
+                if (!event.repeat) {
+                    root.clicked();
+                }
                 return accept;
             }
             return reject;
@@ -228,18 +231,33 @@ component LevelCard inherits Rectangle {
 }
 
 // The two difficulty levels, chosen before each round. Arrow keys switch the level, Enter
-// confirms (starts the round). `locked` shows the choice but ignores input.
+// confirms (starts the round).
+//
+// `guard-on-create`: ignore Enter for a short moment after the picker appears. The picker
+// shows up the instant the last guess ends the round, so a key still held down (auto-repeat)
+// or a quick double-tap on Enter would otherwise skip the "Bravo !" / "Perdu !" screen.
+// A key auto-repeat is always ignored.
 export component LevelPicker inherits Rectangle {
     in-out property <Level> level: Level.facile;
     in property <bool> compact;
     in property <bool> stacked: true;
+    in property <bool> guard-on-create: false;
     callback chosen(Level);
     callback confirmed();
     public function focus-picker() {
         fs.focus();
     }
+    property <bool> guarded: root.guard-on-create;
     // Stacked cards need two rows, side-by-side cards one.
     min-height: root.stacked ? 2 * (root.compact ? 62px : 84px) + 10px : (root.compact ? 62px : 84px);
+
+    Timer {
+        interval: 700ms;
+        running: root.guarded;
+        triggered => {
+            root.guarded = false;
+        }
+    }
 
     fs := FocusScope {
         key-pressed(event) => {
@@ -252,7 +270,9 @@ export component LevelPicker inherits Rectangle {
                 return accept;
             }
             if (event.text == Key.Return) {
-                root.confirmed();
+                if (!event.repeat && !root.guarded) {
+                    root.confirmed();
+                }
                 return accept;
             }
             return reject;
@@ -260,46 +280,34 @@ export component LevelPicker inherits Rectangle {
 
         GridLayout {
             spacing: 10px;
-            Row {
-                LevelCard {
-                    title: "Facile";
-                    description: root.compact ? "Distances affichées" : "Distances affichées sur les flèches";
-                    sample: "Lyon · 392 km";
-                    selected: root.level == Level.facile;
-                    compact: root.compact;
-                    focused: fs.has-focus && root.level == Level.facile;
-                    clicked => {
-                        fs.focus();
-                        root.chosen(Level.facile);
-                    }
-                }
-
-                if !root.stacked: LevelCard {
-                    title: "Difficile";
-                    description: root.compact ? "Flèches seules" : "Flèches seules, sans distances";
-                    sample: "Lyon";
-                    selected: root.level == Level.difficile;
-                    compact: root.compact;
-                    focused: fs.has-focus && root.level == Level.difficile;
-                    clicked => {
-                        fs.focus();
-                        root.chosen(Level.difficile);
-                    }
+            LevelCard {
+                row: 0;
+                col: 0;
+                title: "Facile";
+                description: root.compact ? "Distances affichées" : "Distances affichées sur les flèches";
+                sample: "Lyon · 392 km";
+                selected: root.level == Level.facile;
+                compact: root.compact;
+                focused: fs.has-focus && root.level == Level.facile;
+                clicked => {
+                    fs.focus();
+                    root.chosen(Level.facile);
                 }
             }
 
-            if root.stacked: Row {
-                LevelCard {
-                    title: "Difficile";
-                    description: root.compact ? "Flèches seules" : "Flèches seules, sans distances";
-                    sample: "Lyon";
-                    selected: root.level == Level.difficile;
-                    compact: root.compact;
-                    focused: fs.has-focus && root.level == Level.difficile;
-                    clicked => {
-                        fs.focus();
-                        root.chosen(Level.difficile);
-                    }
+            // Below Facile when stacked, next to it otherwise.
+            LevelCard {
+                row: root.stacked ? 1 : 0;
+                col: root.stacked ? 0 : 1;
+                title: "Difficile";
+                description: root.compact ? "Flèches seules" : "Flèches seules, sans distances";
+                sample: "Lyon";
+                selected: root.level == Level.difficile;
+                compact: root.compact;
+                focused: fs.has-focus && root.level == Level.difficile;
+                clicked => {
+                    fs.focus();
+                    root.chosen(Level.difficile);
                 }
             }
         }
@@ -317,7 +325,6 @@ export component DialFace inherits Rectangle {
     in property <length> body-diameter: root.width * 0.78;
     in property <color> text-color: Theme.signal;
     in property <color> body-color: Theme.chart;
-    in property <bool> serif: true;
 
     Path {
         width: 100%;

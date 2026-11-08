@@ -12,7 +12,6 @@ import { GuessInput, GuessHistory } from "guess.slint";
 
 export { Phase, Level, ArrowView, LabelView, GuessRow, Suggestion, BoardView }
 
-// Header / status / dock heights; the board gets the rest (see tests/ui_flow.rs).
 component Mark inherits Rectangle {
     // Tiny compass mark in front of the title
     in property <length> size: 26px;
@@ -225,6 +224,8 @@ export component AppWindow inherits Window {
     // ======================================================================================
     // Round and end of round
     // ======================================================================================
+    // Header 52 + status strip 46 + dock 168 px; the board gets the rest of the height
+    // (tests/ui_flow.rs and tests/board_layout.rs rely on these numbers).
     if root.phase != Phase.setup: VerticalLayout {
         // Header
         Rectangle {
@@ -416,6 +417,8 @@ export component AppWindow inherits Window {
                         }
 
                         GuessInput {
+                            window-width: root.width;
+                            window-height: root.height;
                             text <=> root.query;
                             suggestions: root.suggestions;
                             highlighted: root.highlighted;
@@ -455,6 +458,7 @@ export component AppWindow inherits Window {
                             level: root.level;
                             compact: true;
                             stacked: false;
+                            guard-on-create: true;
                             chosen(level) => {
                                 root.choose-level(level);
                             }
@@ -478,16 +482,20 @@ export component AppWindow inherits Window {
                 VerticalLayout {
                     horizontal-stretch: 6;
                     spacing: 6px;
+                    // While the suggestion list is open it takes this column's place (it opens
+                    // here so the board stays readable); the space stays reserved, nothing shifts.
                     Text {
                         text: "Distance et direction de chaque essai vers la ville cachée";
                         font-size: 14px;
                         color: Theme.ink-soft;
                         overflow: elide;
+                        visible: !root.suggestions-open;
                     }
 
                     GuessHistory {
                         rows: root.history;
                         height: 3 * 32px + 2 * 6px;
+                        visible: !root.suggestions-open;
                     }
                 }
             }
@@ -501,14 +509,17 @@ export component AppWindow inherits Window {
         x: (root.width - self.width) / 2;
         y: (root.height - self.height) / 2;
         width: 440px;
-        height: 400px;
+        height: 456px;
         close-policy: close-on-click-outside;
 
+        // Esc, a click outside or the "Fermer" button close it.
         Rectangle {
             border-radius: 14px;
             border-width: 2px;
             border-color: Theme.ink;
             background: Theme.chart;
+            accessible-role: groupbox;
+            accessible-label: "À propos de Boussole";
         }
 
         VerticalLayout {
@@ -537,6 +548,17 @@ export component AppWindow inherits Window {
                 font-size: 13px;
                 color: Theme.ink-soft;
                 wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                PrimaryButton {
+                    text: "Fermer";
+                    min-width: 140px;
+                    clicked => {
+                        about.close();
+                    }
+                }
             }
         }
     }

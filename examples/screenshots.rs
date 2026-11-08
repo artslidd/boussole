@@ -117,6 +117,10 @@ fn main() -> Result<()> {
     // Autocomplete while typing, then the list of every city (chevron, or Down on an empty field)
     studio.headless.type_text("sa");
     studio.shoot("04-autocomplete.png")?;
+    // the list opens in the dock, so the board stays readable at the minimum size too
+    studio.resize(800, 600);
+    studio.shoot("14-autocomplete-800x600.png")?;
+    studio.resize(1000, 760);
     studio.clear_field();
     studio.key(Key::DownArrow);
     studio.shoot("05-all-cities.png")?;

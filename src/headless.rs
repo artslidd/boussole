@@ -109,6 +109,13 @@ impl Headless {
         self.settle();
     }
 
+    /// Send an auto-repeat of a held key (the operating system keeps sending the key press).
+    pub fn press_key_repeat(&self, text: impl Into<SharedString>) {
+        self.window
+            .dispatch_event(WindowEvent::KeyPressRepeated { text: text.into() });
+        self.settle();
+    }
+
     /// Type a string character by character.
     pub fn type_text(&self, text: &str) {
         for ch in text.chars() {

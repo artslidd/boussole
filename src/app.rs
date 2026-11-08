@@ -290,6 +290,8 @@ impl App {
         window.on_compute_board({
             let shared = shared.clone();
             move |width, height, _version| {
+                // Test-only bookkeeping (what size did Slint lay the board out at?); the board
+                // itself is a pure function of the size and the round.
                 shared.board_size.set((width, height));
                 compute_board(width, height, &shared.board.borrow())
             }
@@ -313,9 +315,12 @@ impl App {
             let weak = window.as_weak();
             move || {
                 let Some(window) = weak.upgrade() else { return };
-                let seed = (shared.seeds.borrow_mut())();
-                if shared.session.borrow_mut().start_round(seed) {
-                    shared.refresh_board(&window);
+                // A refused start (a round is in progress) must not use up a seed.
+                if shared.session.borrow().phase() != SessionPhase::Playing {
+                    let seed = (shared.seeds.borrow_mut())();
+                    if shared.session.borrow_mut().start_round(seed) {
+                        shared.refresh_board(&window);
+                    }
                 }
                 shared.sync(&window);
             }

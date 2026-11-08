@@ -5,15 +5,16 @@
 //! accessible label, which also proves the controls have a name.
 
 use boussole::app::{App, BoardView, Level, Phase};
-use boussole::board::{HintLabel, format_hint_label, layout_board};
+use boussole::board::{HintLabel, format_hint_label, format_km, layout_board};
 use boussole::cities::City;
 use boussole::game::{Difficulty, Round, RoundStatus};
 use boussole::headless::Headless;
 use boussole::search::{normalize, search};
 use boussole::session::Phase as SessionPhase;
-use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementRoot};
 use slint::ComponentHandle;
 use slint::platform::Key;
+use std::time::Duration;
 
 /// Header + status strip + dock of `ui/app.slint`: the board gets the rest of the window.
 const CHROME_HEIGHT: f32 = 52.0 + 46.0 + 168.0;
@@ -46,6 +47,11 @@ impl Ui {
 
     fn key(&self, key: Key) {
         self.h.press_key(key);
+    }
+
+    /// Let the guard that protects the result screen from a stray Enter run out.
+    fn after_result(&self) {
+        self.h.advance(Duration::from_millis(800));
     }
 
     /// Type a name and press Enter.
@@ -149,7 +155,9 @@ fn a_whole_round_can_be_won_with_the_keyboard_only() {
     assert!(window.get_result_before().starts_with("Bravo ! C’était"));
     assert!(window.get_result_after().contains("en 2 essais."));
 
-    // Enter again (the focus moved to the level picker): a new round starts
+    // Enter again (the focus moved to the level picker, once the result guard has run out): a
+    // new round starts
+    ui.after_result();
     ui.key(Key::Return);
     assert_eq!(ui.phase(), SessionPhase::Playing);
     assert_eq!(ui.tries(), 0);
@@ -222,6 +230,10 @@ fn a_duplicate_guess_is_rejected_without_using_a_try() {
     assert_eq!(ui.tries(), 1, "no try consumed");
     let notice = ui.app.window().get_notice().to_string();
     assert!(notice.contains("déjà été essayée"), "{notice}");
+    assert!(
+        !ui.app.window().get_suggestions_open(),
+        "the list closes so the history shows how that guess went"
+    );
     assert_eq!(ui.phase(), SessionPhase::Playing);
 }
 
@@ -266,6 +278,7 @@ fn the_difficulty_is_chosen_before_a_round_and_locked_during_it() {
     assert_eq!(window.get_level(), Level::Difficile);
     ui.key(Key::LeftArrow);
     assert_eq!(window.get_level(), Level::Facile);
+    ui.after_result();
     ui.key(Key::Return);
     assert_eq!(ui.phase(), SessionPhase::Playing);
     assert_eq!(
@@ -292,18 +305,11 @@ fn facile_labels_show_distances_and_difficile_labels_do_not() {
         assert_eq!(texts.len(), Round::HINT_COUNT);
         for hint in round.hints() {
             let expected = if difficulty.shows_distances() {
-                format!(
-                    "{} · {} km",
-                    hint.city.name,
-                    hint.distance_km.round() as u64
-                )
+                format!("{} · {} km", hint.city.name, format_km(hint.distance_km))
             } else {
                 hint.city.name.to_owned()
             };
-            // thousands are grouped with a space: compare the digits only below 1 000 km
-            if hint.distance_km < 999.5 {
-                assert!(texts.contains(&expected), "{expected:?} not in {texts:?}");
-            }
+            assert!(texts.contains(&expected), "{expected:?} not in {texts:?}");
         }
         if !difficulty.shows_distances() {
             assert!(
@@ -314,6 +320,7 @@ fn facile_labels_show_distances_and_difficile_labels_do_not() {
         // finish the round so the next one can start
         ui.guess(&normalize(round.secret().name));
         assert_eq!(ui.phase(), SessionPhase::Ended);
+        ui.after_result();
     }
 }
 
@@ -433,6 +440,198 @@ fn controls_have_accessible_names() {
     }
 }
 
+// --- regressions from the review ------------------------------------------------------------
+
+/// Position and size of an element, in logical pixels.
+#[derive(Debug, Clone, Copy)]
+struct Bounds {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+}
+
+impl Bounds {
+    fn of(element: &ElementHandle) -> Self {
+        let (p, s) = (element.absolute_position(), element.size());
+        Self {
+            x: p.x,
+            y: p.y,
+            w: s.width,
+            h: s.height,
+        }
+    }
+
+    fn contains(&self, inner: &Bounds) -> bool {
+        inner.x >= self.x - 0.5
+            && inner.y >= self.y - 0.5
+            && inner.x + inner.w <= self.x + self.w + 0.5
+            && inner.y + inner.h <= self.y + self.h + 0.5
+    }
+}
+
+/// The suggestion row the keyboard highlight is on, if it is on screen at all (rows scrolled out
+/// of the list are not part of the visible element tree).
+fn highlighted_row(ui: &Ui) -> Option<Bounds> {
+    ui.app
+        .window()
+        .root_element()
+        .query_descendants()
+        .match_accessible_role(AccessibleRole::ListItem)
+        .find_all()
+        .into_iter()
+        .find(|e| e.accessible_item_selected() == Some(true))
+        .map(|e| Bounds::of(&e))
+}
+
+fn assert_highlight_is_visible(ui: &Ui) {
+    let list = Bounds::of(&ui.element("Suggestions de villes", Some(AccessibleRole::List)));
+    let row = highlighted_row(ui).expect("the highlighted row is on screen (not scrolled out)");
+    assert!(
+        list.contains(&row),
+        "highlighted row {row:?} is outside the list {list:?}"
+    );
+}
+
+#[test]
+fn a_reopened_full_list_is_scrolled_to_its_highlighted_row() {
+    let ui = ui(1000, 760);
+    ui.key(Key::Return); // start
+    let window = ui.app.window();
+    ui.key(Key::DownArrow); // empty field: opens the list of every city
+    assert!(window.get_suggestions_open());
+    for _ in 0..30 {
+        ui.key(Key::DownArrow);
+    }
+    assert_eq!(window.get_highlighted(), 30);
+    assert_highlight_is_visible(&ui);
+
+    ui.key(Key::Escape); // closes the list
+    assert!(!window.get_suggestions_open());
+    ui.key(Key::DownArrow); // reopens it
+    assert!(window.get_suggestions_open());
+    // Enter would submit row 30: it must be the row the player sees highlighted
+    assert_eq!(window.get_highlighted(), 30);
+    assert_highlight_is_visible(&ui);
+}
+
+/// Enter held down (auto-repeat) or tapped twice right after the last guess must not skip the
+/// "Bravo !" / "Perdu !" screen by starting the next round.
+#[test]
+fn enter_repeat_and_a_quick_double_tap_cannot_skip_the_result() {
+    let ui = ui(1000, 760);
+    ui.key(Key::Return); // Setup has no guard: Enter starts at once
+    assert_eq!(ui.phase(), SessionPhase::Playing);
+    ui.guess(&normalize(ui.secret().name));
+    assert_eq!(ui.phase(), SessionPhase::Ended);
+
+    for _ in 0..5 {
+        ui.h.press_key_repeat(Key::Return); // key auto-repeat
+    }
+    assert_eq!(ui.phase(), SessionPhase::Ended, "auto-repeat is ignored");
+    ui.key(Key::Return); // an immediate second tap
+    assert_eq!(ui.phase(), SessionPhase::Ended, "the result stays up");
+
+    ui.after_result();
+    ui.h.press_key_repeat(Key::Return);
+    assert_eq!(
+        ui.phase(),
+        SessionPhase::Ended,
+        "a repeat never starts a round"
+    );
+    ui.key(Key::Return);
+    assert_eq!(ui.phase(), SessionPhase::Playing, "a deliberate Enter does");
+}
+
+/// The suggestion list opens in the dock, so the hint arrows and labels stay readable while
+/// the player chooses.
+fn assert_list_clear_of_the_board(width: u32, height: u32) {
+    let ui = ui(width, height);
+    ui.key(Key::Return);
+    let board_bottom = 52.0 + (height as f32 - CHROME_HEIGHT);
+    let check = |what: &str| {
+        let list = ui.element("Suggestions de villes", Some(AccessibleRole::List));
+        let (p, s) = (list.absolute_position(), list.size());
+        assert!(
+            p.y >= board_bottom - 0.5,
+            "{what} at {width}×{height}: list top {} is inside the board (bottom {board_bottom})",
+            p.y
+        );
+        assert!(p.x >= 0.0 && p.x + s.width <= width as f32 + 0.5);
+        assert!(p.y + s.height <= height as f32 + 0.5);
+        let field = ui.element("Nom de la ville à deviner", None);
+        assert!(
+            p.x >= field.absolute_position().x + field.size().width,
+            "{what}: the list does not cover the field"
+        );
+    };
+    ui.h.type_text("sa"); // a typed query: eight results, five rows visible
+    check("typed query");
+    ui.key(Key::Escape);
+    ui.key(Key::Escape);
+    ui.key(Key::DownArrow); // every city
+    check("full list");
+}
+
+#[test]
+fn the_suggestion_list_does_not_cover_the_board_at_the_default_size() {
+    assert_list_clear_of_the_board(1000, 760);
+}
+
+#[test]
+fn the_suggestion_list_does_not_cover_the_board_at_the_minimum_size() {
+    assert_list_clear_of_the_board(800, 600);
+}
+
+#[test]
+fn the_about_box_has_a_close_button_and_closes_with_escape() {
+    let ui = ui(1000, 760);
+    let is_open = |ui: &Ui| {
+        ElementHandle::find_by_accessible_label(ui.app.window(), "Fermer")
+            .next()
+            .is_some()
+    };
+    assert!(!is_open(&ui));
+
+    ui.click("À propos", None);
+    assert!(is_open(&ui), "the box opens");
+    ui.element("À propos de Boussole", Some(AccessibleRole::Groupbox));
+    // Elements of a popup report their position relative to the popup, which `app.slint` centres
+    // in the window (440 × 456).
+    let (fermer_x, fermer_y) = Ui::center(&ui.element("Fermer", Some(AccessibleRole::Button)));
+    ui.h.click(
+        (1000.0 - 440.0) / 2.0 + fermer_x,
+        (760.0 - 456.0) / 2.0 + fermer_y,
+    );
+    assert!(!is_open(&ui), "the Fermer button closes it");
+
+    ui.app.window().invoke_show_about();
+    ui.h.settle();
+    assert!(is_open(&ui));
+    ui.key(Key::Escape);
+    assert!(!is_open(&ui), "Esc closes it too");
+    assert_eq!(ui.phase(), SessionPhase::Setup, "and does nothing else");
+}
+
+/// `--seed N` must give round k the seed N + k: a refused start must not burn one.
+#[test]
+fn a_refused_start_does_not_use_up_a_seed() {
+    let ui = ui(1000, 760);
+    ui.key(Key::Return); // round 1: seed 100
+    assert_eq!(
+        *ui.app.session().round().unwrap(),
+        Round::new_random(Difficulty::Facile, 100)
+    );
+    ui.app.window().invoke_start_round(); // refused: a round is in progress
+    ui.guess(&normalize(ui.secret().name));
+    ui.after_result();
+    ui.key(Key::Return); // round 2: seed 101, not 102
+    assert_eq!(
+        *ui.app.session().round().unwrap(),
+        Round::new_random(Difficulty::Facile, 101)
+    );
+}
+
 // --- layout of the real window ------------------------------------------------------------
 
 #[test]
@@ -463,10 +662,12 @@ fn the_board_fits_the_real_window_at_default_and_minimum_size() {
             assert!(layout.problems().is_empty(), "{:?}", layout.problems());
             // finish the round, flip the level and start the next one
             ui.guess(&normalize(round.secret().name));
+            ui.after_result();
             ui.key(Key::RightArrow);
             ui.key(Key::Return);
         }
         ui.guess(&normalize(ui.secret().name));
+        ui.after_result();
         ui.key(Key::LeftArrow);
     }
 }
