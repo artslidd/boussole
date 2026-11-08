@@ -556,11 +556,33 @@ dependencies = [
 name = "boussole"
 version = "0.1.0"
 dependencies = [
+ "boussole-core",
  "i-slint-backend-testing",
  "png",
  "slint",
  "slint-build",
  "ttf-parser",
+]
+
+[[package]]
+name = "boussole-core"
+version = "0.1.0"
+
+[[package]]
+name = "boussole-protocol"
+version = "0.1.0"
+dependencies = [
+ "boussole-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "boussole-server"
+version = "0.1.0"
+dependencies = [
+ "boussole-core",
+ "boussole-protocol",
 ]
 
 [[package]]

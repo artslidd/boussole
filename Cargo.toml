@@ -1,13 +1,30 @@
-[package]
-name = "boussole"
+[workspace]
+members = [".", "crates/*"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
-description = "Boussole: guess the hidden French city from compass arrows to other cities"
 publish = false
 
-# The core (cities, geo, search, game) is pure std (tiny in-crate SplitMix64 PRNG); the
-# dependencies below are for the Slint front end only.
+[workspace.dependencies]
+boussole-core = { path = "crates/boussole-core" }
+boussole-protocol = { path = "crates/boussole-protocol" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# The root package is the Slint desktop client (`cargo run --release` launches the game).
+[package]
+name = "boussole"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Boussole: guess the hidden French city from compass arrows to other cities"
+
+# The core (cities, geo, search, game) lives in crates/boussole-core and is re-exported by
+# src/lib.rs; the dependencies below are for the Slint front end only.
 [dependencies]
+boussole-core.workspace = true
 slint = "1.18"
 ttf-parser = "0.25"
 

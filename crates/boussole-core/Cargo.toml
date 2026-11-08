@@ -1,0 +1,9 @@
+[package]
+name = "boussole-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Boussole core: cities dataset, geo math, search and round rules (no GUI, no dependencies)"
+
+# Pure std on purpose: shared by the desktop client and the server.
+[dependencies]
