@@ -38,6 +38,24 @@ Needs a recent stable Rust toolchain. Slint is built with its default winit back
 FemtoVG renderer; Qt is **not** required (the `fluent` std-widgets style is pinned in
 `build.rs`). The first build compiles many crates and takes a few minutes.
 
+## Multijoueur
+
+Online rooms for 2–8 players (code + nickname; the host picks the mode — **Course**, a race on
+the same city, or **Coopération**, turns on one shared round — and the settings). The server
+is authoritative and never reveals the hidden city before the round ends.
+
+Nobody has to rent a server: one player hosts from their own computer and friends join by
+address and room code, over the LAN or through a free Cloudflare quick tunnel.
+
+```sh
+cargo run --release -p boussole-server                # LAN: ws://<your-ip>:7878/ws
+cargo run --release -p boussole-server -- --tunnel    # + a public wss://….trycloudflare.com/ws (needs cloudflared)
+```
+
+- **[`docs/deploy.md`](docs/deploy.md)**: every way to run the server (from a player's
+  computer, LAN, Docker/Podman, optional always-on host with HTTPS) and how to troubleshoot it.
+- **[`docs/protocol.md`](docs/protocol.md)**: the wire protocol, rules, timers and scoring.
+
 ## How to play
 
 1. Pick **Facile** or **Difficile**, then **Nouvelle partie**.
@@ -92,7 +110,7 @@ server being built (online rooms in two modes, *Course* and *Coopération*).
 | `boussole` (root) | the Slint desktop client: solo game today, online mode to come |
 | [`crates/boussole-core`](crates/boussole-core) | GUI-free, dependency-free kernel: `cities` (embedded dataset of 120 cities), `geo`, `search`, `game`; also `dataset_fingerprint()` / `DATASET_VERSION` |
 | [`crates/boussole-protocol`](crates/boussole-protocol) | the wire protocol: message types, JSON codec, validation helpers, golden fixtures |
-| [`crates/boussole-server`](crates/boussole-server) | the multiplayer server; for now only the pure, IO-free **match engine** (`engine/`: rooms, Course and Coopération rules, timers, scoring, resume) — networking comes next |
+| [`crates/boussole-server`](crates/boussole-server) | the multiplayer server: the pure, IO-free **match engine** (`engine/`: rooms, Course and Coopération rules, timers, scoring, resume) behind an axum/WebSocket transport; usable as a binary or embedded as a library (`start`, `ServerHandle`, `tunnel`); `examples/bot` is a scripted player |
 
 The protocol is specified in [`docs/protocol.md`](docs/protocol.md): transport, handshake,
 every message with a JSON example, state diagrams, timers, scoring, error codes, versioning.
@@ -119,7 +137,7 @@ every message with a JSON example, state diagrams, timers, scoring, error codes,
 
 ```sh
 cargo test --workspace                  # every crate: unit tests, layout sweeps, UI and engine tests
-cargo test -p boussole-server           # the match engine only (fast, no GUI)
+cargo test -p boussole-server           # engine + network server + tunnel helper (real sockets, no GUI)
 cargo test -p boussole-protocol         # codec + golden JSON fixtures (+ docs/protocol.md check)
 cargo test -p boussole --lib board::    # one module of the client
 

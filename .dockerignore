@@ -1,0 +1,8 @@
+# Deny everything, then allow exactly what the server image needs: the workspace manifests
+# and the crates. This keeps target/, .git, docs/screenshots, ui/ (fonts), the Slint client
+# sources and any local state out of the build context.
+*
+!Cargo.toml
+!Cargo.lock
+!crates/
+**/target/

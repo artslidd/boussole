@@ -1,0 +1,21 @@
+# Caddy in front of the Boussole server: automatic HTTPS (Let's Encrypt) for $BOUSSOLE_DOMAIN,
+# WebSocket upgrades handled by reverse_proxy, everything except /ws and /healthz refused.
+#
+# Used by deploy/compose.yaml (profile `tls`); both variables come from the environment:
+#   BOUSSOLE_DOMAIN  public host name, DNS A/AAAA record pointing at this machine
+#   ACME_EMAIL       contact address for the certificate authority
+{
+	email {$ACME_EMAIL}
+}
+
+{$BOUSSOLE_DOMAIN} {
+	handle /ws {
+		reverse_proxy server:7878
+	}
+	handle /healthz {
+		reverse_proxy server:7878
+	}
+	handle {
+		respond "Not found" 404
+	}
+}

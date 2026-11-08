@@ -608,6 +608,22 @@ engine.tick(now_ms)                 // same output handling
 - `Engine::room_count()` / `player_count()` are for metrics. `debug_secret` and
   `check_invariants` are `#[doc(hidden)]` test aids: never wire them to the network.
 
+**As implemented by `boussole-server` (ticket 04).** The transport adds, around the engine,
+the following limits (all without changing any message; values are `ServerConfig` fields and
+are listed with their defaults in `docs/deploy.md`):
+
+| Transport rule | Behaviour |
+|---|---|
+| Frame over 4096 bytes | `bad_message` then close with WebSocket code 1008 (up to 16 KiB is read to answer; beyond that the socket is aborted) |
+| Binary frame | `bad_message`, connection kept |
+| Message rate | token bucket, 10 messages/s with bursts of 20; refused messages get `rate_limited` and are not given to the engine; sustained flooding closes the socket (1008) |
+| No `hello` | the socket is closed (1008) 10 s after connecting |
+| Liveness | WebSocket ping every 20 s; a socket silent for 60 s (pongs count) is dropped and reported to the engine as a disconnection (60 s resume window) |
+| Slow reader | 64 queued messages per connection; beyond that the connection is dropped (same resume window) |
+| Connection cap | an upgrade beyond `max_connections` is refused with HTTP 503 |
+| Room cap | `create_room` while `max_rooms` rooms exist is answered `invalid_state` (the protocol has no dedicated code; joining existing rooms still works) |
+| Shutdown | clients receive a WebSocket close with code 1001 (going away); no protocol message exists for it, so a client seeing 1001 should treat the server as gone |
+
 ## 15. Notes for the client (05)
 
 - Keep one `Room` state. On `room_snapshot`, **replace** it; on events, update it. The state
