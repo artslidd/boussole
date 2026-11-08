@@ -203,6 +203,32 @@ fn when_the_preferred_port_is_taken_it_falls_back_to_a_free_one() {
     host.stop();
 }
 
+/// On macOS a wildcard bind succeeds next to a program that listens on the loopback address of
+/// the same port: the host's own client (and anyone on this machine) would then reach that
+/// program instead of the game. So the port is probed before it is bound.
+#[test]
+fn a_loopback_listener_on_the_preferred_port_makes_it_fall_back_to_a_free_one() {
+    let squatter = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = squatter.local_addr().unwrap().port();
+    let host = EmbeddedHost::with_lan_bind(SocketAddr::from(([0, 0, 0, 0], port)));
+    let info = host.start(HostMode::Lan).expect("falls back");
+    assert_ne!(
+        info.port, port,
+        "never shares the port with the other program"
+    );
+    // and the game really is what answers on the address it announces
+    let mut alice = join(&info.local_url, "Alice");
+    alice.handle.send(ClientMsg::CreateRoom {
+        config: RoomConfig::new(Mode::Course, Difficulty::Facile),
+    });
+    alice.until("the room", |m| match m {
+        ServerMsg::RoomSnapshot(s) => Some(s.code.clone()),
+        _ => None,
+    });
+    host.stop();
+    drop(squatter);
+}
+
 #[test]
 fn lan_addresses_are_listed_without_loopback() {
     let host = host();

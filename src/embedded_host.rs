@@ -28,6 +28,10 @@ const MAX_CONNECTIONS_PER_IP: usize = 8;
 /// itself gives up after 5 s). The app waits longer than this at exit, see `online_ui::EXIT_WAIT`.
 const SERVER_SHUTDOWN_BOUND: Duration = Duration::from_secs(6);
 
+/// Longest a loopback connection is given to tell whether something listens (it answers or is
+/// refused at once).
+const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+
 type TunnelFuture = Pin<Box<dyn Future<Output = Result<Tunnel, TunnelError>> + Send>>;
 type TunnelStarter = Arc<dyn Fn(u16) -> TunnelFuture + Send + Sync>;
 
@@ -166,6 +170,15 @@ impl EmbeddedHost {
     }
 
     async fn start_lan(&self) -> Result<ServerHandle, HostError> {
+        // On macOS a wildcard bind succeeds next to a program that listens on the loopback
+        // address of the same port, and the host's own client (and anyone on this machine)
+        // would then reach that program instead of the game: so anything that answers on the
+        // loopback address means the preferred port is not ours to use.
+        if self.lan_bind.port() != 0 && something_answers_on_loopback(self.lan_bind.port()).await {
+            return start(host_config(SocketAddr::new(self.lan_bind.ip(), 0)))
+                .await
+                .map_err(map_io);
+        }
         match start(host_config(self.lan_bind)).await {
             Ok(server) => Ok(server),
             // The preferred port is taken (another game, another program): any free one will do,
@@ -250,6 +263,17 @@ impl Host for EmbeddedHost {
             None => HostHealth::Running,
         }
     }
+}
+
+/// Does a connection to `127.0.0.1:port` succeed? Nothing is sent: the connection is dropped at
+/// once. A refusal, a timeout or any other error counts as "nothing answers" (a bind will still
+/// report a port that is really taken).
+async fn something_answers_on_loopback(port: u16) -> bool {
+    let connect = tokio::net::TcpStream::connect(SocketAddr::from(([127, 0, 0, 1], port)));
+    matches!(
+        tokio::time::timeout(PROBE_TIMEOUT, connect).await,
+        Ok(Ok(_))
+    )
 }
 
 /// What is wrong, given whether the server runs and (if there is a tunnel) whether it does.
