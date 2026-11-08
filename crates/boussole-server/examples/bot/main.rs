@@ -162,6 +162,8 @@ async fn play(args: Args) -> Result<(), String> {
     let mut strat = Strategy::new(args.seed);
     let mut joined = false;
     let mut started = false;
+    // Course or Coopération is the room's setting: learned from the first round_started.
+    let mut course = args.mode == Mode::Course;
     let think = args.think;
 
     while let Some(frame) = ws.next().await {
@@ -219,6 +221,7 @@ async fn play(args: Args) -> Result<(), String> {
                     r.hints.len()
                 );
                 strat.reset();
+                course = matches!(r.timer, Timer::Round { .. });
                 let my_turn = match r.timer {
                     Timer::Round { .. } => true,
                     Timer::Turn { player_id, .. } => player_id == me,
@@ -244,7 +247,7 @@ async fn play(args: Args) -> Result<(), String> {
                     if g.correct { " (correct)" } else { "" }
                 );
                 strat.observe(&g);
-                if g.by == me && args.mode == Mode::Course {
+                if g.by == me && course {
                     let done = g.correct || g.tries_used >= MAX_TRIES;
                     if !done {
                         tokio::time::sleep(think).await;
@@ -286,6 +289,8 @@ async fn play(args: Args) -> Result<(), String> {
                     .map(|r| format!("{}. {} {}", r.rank, r.nickname, r.total))
                     .collect();
                 println!("{tag} MATCH ENDED: {}", ranking.join(" | "));
+                // Leave politely so the room is freed at once instead of held for 60 s.
+                send(&mut ws, ClientMsg::LeaveRoom).await?;
                 let _ = ws.close(None).await;
                 return Ok(());
             }

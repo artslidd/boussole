@@ -8,6 +8,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
@@ -26,6 +27,37 @@ const TAIL_LINES: usize = 6;
 pub struct Tunnel {
     child: Child,
     ws_url: String,
+    _config: EmptyConfig,
+}
+
+/// An empty cloudflared configuration file, deleted when dropped.
+///
+/// Quick tunnels refuse to run next to a user's own cloudflared configuration (`proxy-dns`,
+/// named tunnels, ... in `/etc/cloudflared` or `~/.cloudflared`: "running a quick tunnel with
+/// `proxy-dns` is not supported"), so `--config` points at this empty file instead.
+#[derive(Debug)]
+struct EmptyConfig(PathBuf);
+
+impl EmptyConfig {
+    fn create() -> std::io::Result<Self> {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "boussole-cloudflared-{}-{n}.yml",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "# intentionally empty: a quick tunnel needs no configuration\n",
+        )?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for EmptyConfig {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 impl Tunnel {
@@ -67,9 +99,9 @@ impl fmt::Display for TunnelError {
 
 impl std::error::Error for TunnelError {}
 
-/// Run `cloudflared tunnel --no-autoupdate --url http://127.0.0.1:<local_port>` and wait for
-/// its public URL (about 20 s at most). The server must listen on `127.0.0.1:<local_port>`
-/// (or `0.0.0.0`).
+/// Run `cloudflared tunnel --no-autoupdate --config <empty file> --url
+/// http://127.0.0.1:<local_port>` and wait for its public URL (about 20 s at most). The
+/// server must listen on `127.0.0.1:<local_port>` (or `0.0.0.0`).
 pub async fn start_cloudflared(local_port: u16) -> Result<Tunnel, TunnelError> {
     launch(OsStr::new("cloudflared"), None, local_port, START_TIMEOUT).await
 }
@@ -81,8 +113,13 @@ pub(crate) async fn launch(
     local_port: u16,
     start_timeout: Duration,
 ) -> Result<Tunnel, TunnelError> {
+    let config = EmptyConfig::create().map_err(|e| {
+        TunnelError::StartFailed(format!("cannot write a temporary cloudflared config: {e}"))
+    })?;
     let mut cmd = Command::new(program);
-    cmd.args(["tunnel", "--no-autoupdate", "--url"])
+    cmd.args(["tunnel", "--no-autoupdate", "--config"])
+        .arg(&config.0)
+        .arg("--url")
         .arg(format!("http://127.0.0.1:{local_port}"))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -115,7 +152,7 @@ pub(crate) async fn launch(
                 Some(line) => {
                     if let Some(https) = parse_quick_tunnel_url(&line) {
                         let host = https.trim_start_matches("https://");
-                        return Ok(Tunnel { child, ws_url: format!("wss://{host}/ws") });
+                        return Ok(Tunnel { child, ws_url: format!("wss://{host}/ws"), _config: config });
                     }
                     if tail.len() == TAIL_LINES {
                         tail.remove(0);
@@ -177,7 +214,8 @@ pub(crate) fn parse_quick_tunnel_url(line: &str) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// Output of a real run (words replaced), reproduced from `cloudflared` 2025/2026.
+    /// Quick-tunnel output as `cloudflared` prints it (modelled on 2026.1; the words in the URL
+    /// are made up). The live run in the ticket log parsed the real output the same way.
     const SAMPLE: &str = "\
 2026-11-08T17:00:00Z INF Thank you for trying Cloudflare Tunnel. Doing so, without a Cloudflare account, is a quick way to experiment and try it out. However, be aware that these account-less Tunnels have no uptime guarantee, are subject to the Cloudflare Online Services Terms of Use (https://www.cloudflare.com/website-terms/), and Cloudflare reserves the right to investigate your use of Tunnels for violations of such terms.
 2026-11-08T17:00:00Z INF Requesting new quick Tunnel on trycloudflare.com...
@@ -329,14 +367,24 @@ mod tests {
                 tunnel.public_ws_url(),
                 "wss://fake-words-here.trycloudflare.com/ws"
             );
-            assert_eq!(
-                fake.args(),
-                "tunnel --no-autoupdate --url http://127.0.0.1:4321"
+            let args = fake.args();
+            let config = args
+                .strip_prefix("tunnel --no-autoupdate --config ")
+                .and_then(|rest| rest.strip_suffix(" --url http://127.0.0.1:4321"))
+                .unwrap_or_else(|| panic!("unexpected arguments: {args}"))
+                .to_owned();
+            assert!(
+                std::path::Path::new(&config).is_file(),
+                "the empty config exists while the tunnel runs"
             );
             let pid = fake.pid();
             assert!(alive(pid));
             tunnel.stop().await;
             assert_dies(pid).await;
+            assert!(
+                !std::path::Path::new(&config).exists(),
+                "the temporary config is removed with the tunnel"
+            );
         }
 
         #[tokio::test]
