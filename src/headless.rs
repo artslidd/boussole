@@ -83,6 +83,13 @@ impl Headless {
         }
     }
 
+    /// Let `duration` of animation time pass and run the timers due, without rendering (cheap
+    /// enough to loop on while waiting for the network).
+    pub fn tick(&self, duration: Duration) {
+        self.clock.set(self.clock.get() + duration);
+        slint::platform::update_timers_and_animations();
+    }
+
     /// Let `duration` of animation time pass, then settle.
     pub fn advance(&self, duration: Duration) {
         self.clock.set(self.clock.get() + duration);

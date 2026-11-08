@@ -118,6 +118,11 @@ impl MockServer {
         self.shared.lock().unwrap().handshake = Some(handshake);
     }
 
+    /// Forget every resume token, as a restarted server would.
+    pub fn forget_tokens(&self) {
+        self.shared.lock().unwrap().tokens.clear();
+    }
+
     /// Stop accepting connections: new ones are closed at once (the server "is down").
     pub fn refuse_connections(&self, refuse: bool) {
         self.shared.lock().unwrap().refuse = refuse;

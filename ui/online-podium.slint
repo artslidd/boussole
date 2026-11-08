@@ -1,0 +1,150 @@
+// The end of a match: the final ranking (Course) or the team score with each player's finds
+// (Coopération), and the way back to the lobby.
+
+import { Theme } from "theme.slint";
+import { RankRowView } from "types.slint";
+import { Online } from "online-state.slint";
+import { ActionButton } from "online-widgets.slint";
+
+component RankLine inherits Rectangle {
+    in property <RankRowView> entry;
+    height: 42px;
+    border-radius: 10px;
+    border-width: root.entry.first ? 2px : 1px;
+    border-color: root.entry.first ? Theme.ink : Theme.rule;
+    background: root.entry.first ? Theme.amber-wash : root.entry.me ? Theme.chart : transparent;
+    accessible-role: list-item;
+    accessible-label: (root.entry.rank != "" ? "Rang " + root.entry.rank + " : " : "") + root.entry.name + (root.entry.me ? " (vous)" : "") + ", " + root.entry.total + " points, " + root.entry.detail;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 16px;
+        spacing: 12px;
+        if root.entry.rank != "": Rectangle {
+            width: 30px;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 30px;
+                    height: 30px;
+                    border-radius: 15px;
+                    border-width: 2px;
+                    border-color: Theme.ink;
+                    background: root.entry.first ? Theme.amber : Theme.chart;
+                    Text {
+                        width: 100%;
+                        height: 100%;
+                        text: root.entry.rank;
+                        font-family: Theme.display-font;
+                        font-size: 16px;
+                        color: Theme.ink;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        Text {
+            text: root.entry.name + (root.entry.me ? "  (vous)" : "");
+            font-size: 18px;
+            font-weight: 600;
+            color: Theme.ink;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+
+        Text {
+            text: root.entry.detail;
+            font-size: 14px;
+            color: Theme.ink-soft;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: root.entry.total;
+            min-width: 70px;
+            font-family: Theme.display-font;
+            font-size: 22px;
+            color: Theme.ink;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component Podium inherits Rectangle {
+    HorizontalLayout {
+        padding-left: 32px;
+        padding-right: 32px;
+        alignment: center;
+
+        VerticalLayout {
+            max-width: 700px;
+            horizontal-stretch: 1;
+            padding-top: 14px;
+            padding-bottom: 16px;
+            spacing: 4px;
+
+            HorizontalLayout {
+                height: 52px;
+                Text {
+                    text: Online.podium-title;
+                    font-family: Theme.display-font;
+                    font-size: 34px;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    accessible-role: text;
+                }
+
+                if Online.team-total != "": Text {
+                    text: Online.team-total;
+                    font-family: Theme.display-font;
+                    font-size: 28px;
+                    color: Theme.go;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                    accessible-role: text;
+                    accessible-label: "Score d’équipe : " + Online.team-total;
+                }
+            }
+
+            Rectangle {
+                height: 6px;
+            }
+
+            VerticalLayout {
+                spacing: 4px;
+                accessible-role: list;
+                accessible-label: Online.podium-title;
+                for row in Online.ranking: RankLine {
+                    entry: row;
+                }
+            }
+
+            Rectangle {
+                height: 14px;
+            }
+
+            HorizontalLayout {
+                alignment: start;
+                ActionButton {
+                    text: "Retour au salon";
+                    primary: true;
+                    init => {
+                        self.focus-button();
+                    }
+                    clicked => {
+                        Online.back-to-lobby();
+                    }
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+            }
+        }
+    }
+}

@@ -1,0 +1,582 @@
+// Widgets of the online screens. They follow ui/widgets.slint (chart paper, ink outlines, amber
+// action, ink focus ring) and add what the online forms need: a disabled state, text fields,
+// a segmented choice, a stepper and the tries dots.
+
+import { Theme } from "theme.slint";
+import { DotStatus } from "types.slint";
+import { FocusRing } from "widgets.slint";
+
+// A button that can be disabled. `primary`: amber action; otherwise outlined.
+export component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> primary: true;
+    in property <bool> compact: false;
+    callback clicked();
+    public function focus-button() {
+        fs.focus();
+    }
+    min-height: root.compact ? 34px : 46px;
+    min-width: root.compact ? 84px : 150px;
+    border-radius: root.compact ? 8px : 10px;
+    border-width: 2px;
+    border-color: root.enabled ? Theme.ink : Theme.rule;
+    background: !root.enabled ? Theme.paper : root.primary ? (touch.pressed ? Theme.amber-deep : touch.has-hover ? Theme.amber-hover : Theme.amber) : (touch.pressed ? Theme.rule : touch.has-hover ? Theme.chart : transparent);
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if (root.enabled) {
+            root.clicked();
+        }
+    }
+
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == Key.Return || event.text == " ") {
+                // A held key (auto-repeat) must not press the button again.
+                if (!event.repeat) {
+                    root.clicked();
+                }
+                return accept;
+            }
+            return reject;
+        }
+        touch := TouchArea {
+            enabled: root.enabled;
+            mouse-cursor: root.enabled ? pointer : default;
+            clicked => {
+                fs.focus();
+                root.clicked();
+            }
+        }
+    }
+
+    Text {
+        width: 100%;
+        height: 100%;
+        text: root.text;
+        color: root.enabled ? Theme.ink : Theme.ink-soft;
+        font-size: root.compact ? 14px : 17px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    FocusRing {
+        active: fs.has-focus;
+        corner: root.compact ? 8px : 10px;
+        target-width: root.width;
+        target-height: root.height;
+    }
+}
+
+// A labelled text field. The error (if any) replaces the hint on the label line, so showing it
+// never moves anything.
+export component TextField inherits Rectangle {
+    in property <string> label;
+    in property <string> placeholder;
+    in property <string> hint;
+    in property <string> error;
+    in property <bool> read-only: false;
+    in-out property <string> text;
+    callback edited(string);
+    callback accepted();
+    public function focus-field() {
+        input.focus();
+    }
+    min-height: 66px;
+
+    VerticalLayout {
+        spacing: 4px;
+        HorizontalLayout {
+            height: 20px;
+            spacing: 8px;
+            Text {
+                text: root.label;
+                color: Theme.ink;
+                font-size: 15px;
+                font-weight: 600;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+
+            Text {
+                text: root.error != "" ? root.error : root.hint;
+                color: root.error != "" ? Theme.signal-ink : Theme.ink-soft;
+                font-size: 13px;
+                font-weight: root.error != "" ? 600 : 400;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+                overflow: elide;
+                horizontal-stretch: 1;
+                accessible-role: AccessibleRole.text;
+                accessible-label: root.error;
+                accessible-live-region: assertive;
+            }
+        }
+
+        Rectangle {
+            height: 42px;
+            border-radius: 10px;
+            border-width: 2px;
+            border-color: root.error != "" ? Theme.signal : root.read-only ? Theme.rule : Theme.ink;
+            background: root.read-only ? Theme.paper : Theme.chart;
+
+            if input.has-focus: Rectangle {
+                x: -5px;
+                y: -5px;
+                width: parent.width + 10px;
+                height: parent.height + 10px;
+                border-radius: 15px;
+                border-width: 2px;
+                border-color: Theme.amber-deep;
+            }
+
+            input := TextInput {
+                x: 12px;
+                width: parent.width - 24px;
+                height: parent.height;
+                single-line: true;
+                read-only: root.read-only;
+                text <=> root.text;
+                color: Theme.ink;
+                font-size: 17px;
+                selection-background-color: Theme.amber;
+                selection-foreground-color: Theme.ink;
+                vertical-alignment: center;
+                accessible-role: text-input;
+                accessible-label: root.label;
+                accessible-placeholder-text: root.placeholder;
+                edited => {
+                    root.edited(self.text);
+                }
+                accepted => {
+                    root.accepted();
+                }
+            }
+
+            if root.text == "": Text {
+                x: 12px;
+                width: parent.width - 24px;
+                height: parent.height;
+                text: root.placeholder;
+                color: Theme.ink-soft;
+                font-size: 17px;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+component RadioRow inherits Rectangle {
+    in property <string> title;
+    in property <string> detail;
+    in property <bool> selected;
+    in property <bool> enabled;
+    callback clicked();
+    height: 40px;
+    border-radius: 10px;
+    border-width: 2px;
+    border-color: root.selected ? Theme.ink : Theme.rule;
+    background: root.selected ? Theme.amber-wash : touch.has-hover && root.enabled ? Theme.chart : transparent;
+    accessible-role: radio-button;
+    accessible-label: root.title + " : " + root.detail;
+    accessible-checked: root.selected;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        spacing: 10px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 18px;
+                height: 18px;
+                border-radius: 9px;
+                border-width: 2px;
+                border-color: Theme.ink;
+                background: Theme.chart;
+                Rectangle {
+                    visible: root.selected;
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: Theme.ink;
+                }
+            }
+        }
+
+        Text {
+            text: root.title;
+            color: Theme.ink;
+            font-size: 16px;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: root.detail;
+            color: Theme.ink-soft;
+            font-size: 13px;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+    }
+}
+
+// Two radio rows (a title and a one-line detail each). Arrow keys switch, one tab stop.
+export component RadioRows inherits Rectangle {
+    in property <string> group-label;
+    in property <string> title-a;
+    in property <string> detail-a;
+    in property <string> title-b;
+    in property <string> detail-b;
+    in property <int> selected;
+    in property <bool> enabled: true;
+    callback chosen(int);
+    min-height: 2 * 40px + 6px;
+
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == Key.LeftArrow || event.text == Key.UpArrow) {
+                root.chosen(0);
+                return accept;
+            }
+            if (event.text == Key.RightArrow || event.text == Key.DownArrow) {
+                root.chosen(1);
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            spacing: 6px;
+            RadioRow {
+                title: root.title-a;
+                detail: root.detail-a;
+                selected: root.selected == 0;
+                enabled: root.enabled;
+                clicked => {
+                    fs.focus();
+                    root.chosen(0);
+                }
+            }
+
+            RadioRow {
+                title: root.title-b;
+                detail: root.detail-b;
+                selected: root.selected == 1;
+                enabled: root.enabled;
+                clicked => {
+                    fs.focus();
+                    root.chosen(1);
+                }
+            }
+        }
+    }
+
+    FocusRing {
+        active: fs.has-focus;
+        corner: 10px;
+        target-width: root.width;
+        target-height: root.height;
+    }
+}
+
+component SegmentedHalf inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    in property <bool> enabled;
+    callback clicked();
+    border-radius: 10px;
+    border-width: 2px;
+    border-color: root.enabled ? Theme.ink : Theme.rule;
+    background: root.selected ? (root.enabled ? Theme.ink : Theme.rule) : touch.has-hover && root.enabled ? Theme.amber-wash : Theme.chart;
+    accessible-role: radio-button;
+    accessible-label: root.label;
+    accessible-checked: root.selected;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.clicked();
+    }
+    touch := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    Text {
+        width: 100%;
+        height: 100%;
+        text: root.label;
+        color: root.selected ? (root.enabled ? Theme.chart : Theme.ink) : root.enabled ? Theme.ink : Theme.ink-soft;
+        font-size: 15px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// A two-option choice (Course | Coopération, Facile | Difficile) as two pills. Read-only (greyed
+// out, not clickable) when `enabled` is false: guests see the host's choice but cannot change it.
+export component Segmented inherits Rectangle {
+    in property <string> label-a;
+    in property <string> label-b;
+    in property <int> selected;
+    in property <bool> enabled: true;
+    callback chosen(int);
+    height: 38px;
+    min-width: 220px;
+
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == Key.LeftArrow) {
+                root.chosen(0);
+                return accept;
+            }
+            if (event.text == Key.RightArrow) {
+                root.chosen(1);
+                return accept;
+            }
+            return reject;
+        }
+
+        SegmentedHalf {
+            x: 0px;
+            width: (root.width - 8px) / 2;
+            height: root.height;
+            label: root.label-a;
+            selected: root.selected == 0;
+            enabled: root.enabled;
+            clicked => {
+                fs.focus();
+                root.chosen(0);
+            }
+        }
+
+        SegmentedHalf {
+            x: (root.width + 8px) / 2;
+            width: (root.width - 8px) / 2;
+            height: root.height;
+            label: root.label-b;
+            selected: root.selected == 1;
+            enabled: root.enabled;
+            clicked => {
+                fs.focus();
+                root.chosen(1);
+            }
+        }
+    }
+
+    FocusRing {
+        active: fs.has-focus;
+        corner: 10px;
+        target-width: root.width;
+        target-height: root.height;
+    }
+}
+
+component StepperPip inherits Rectangle {
+    in property <string> glyph;
+    in property <string> name;
+    in property <bool> active;
+    callback clicked();
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    border-width: 2px;
+    border-color: root.active ? Theme.ink : Theme.rule;
+    background: root.active && pip-touch.has-hover ? Theme.amber-wash : transparent;
+    accessible-role: button;
+    accessible-label: root.name;
+    accessible-enabled: root.active;
+    accessible-action-default => {
+        if (root.active) {
+            root.clicked();
+        }
+    }
+    pip-touch := TouchArea {
+        enabled: root.active;
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    Path {
+        width: 14px;
+        height: 14px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        viewbox-width: 14;
+        viewbox-height: 14;
+        commands: root.glyph == "plus" ? "M 7 2 L 7 12 M 2 7 L 12 7" : "M 2 7 L 12 7";
+        stroke: root.active ? Theme.ink : Theme.rule;
+        stroke-width: 2px;
+        stroke-line-cap: round;
+    }
+}
+
+// "− 5 +": one tab stop, ← → (or − +) change the value. Exposed to assistive technology as a
+// spin box.
+export component Stepper inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> enabled: true;
+    in property <bool> can-dec: true;
+    in property <bool> can-inc: true;
+    callback step(int);
+    height: 38px;
+    accessible-role: spinbox;
+    accessible-label: root.label;
+    accessible-value: root.value;
+    accessible-enabled: root.enabled;
+    accessible-action-increment => {
+        if (root.enabled && root.can-inc) {
+            root.step(1);
+        }
+    }
+    accessible-action-decrement => {
+        if (root.enabled && root.can-dec) {
+            root.step(-1);
+        }
+    }
+
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if (event.text == Key.LeftArrow || event.text == Key.DownArrow || event.text == "-") {
+                if (root.can-dec) {
+                    root.step(-1);
+                }
+                return accept;
+            }
+            if (event.text == Key.RightArrow || event.text == Key.UpArrow || event.text == "+") {
+                if (root.can-inc) {
+                    root.step(1);
+                }
+                return accept;
+            }
+            return reject;
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: root.label;
+                color: root.enabled ? Theme.ink : Theme.ink-soft;
+                font-size: 16px;
+                font-weight: 500;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+            }
+
+            StepperPip {
+                glyph: "minus";
+                name: root.label + " : diminuer";
+                active: root.enabled && root.can-dec;
+                clicked => {
+                    fs.focus();
+                    root.step(-1);
+                }
+            }
+
+            Text {
+                text: root.value;
+                min-width: 52px;
+                color: root.enabled ? Theme.ink : Theme.ink-soft;
+                font-size: 17px;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            StepperPip {
+                glyph: "plus";
+                name: root.label + " : augmenter";
+                active: root.enabled && root.can-inc;
+                clicked => {
+                    fs.focus();
+                    root.step(1);
+                }
+            }
+        }
+    }
+
+    FocusRing {
+        active: fs.has-focus;
+        corner: 10px;
+        target-width: root.width;
+        target-height: root.height;
+    }
+}
+
+// Tries used in a Course round, as small dots. The colour never carries the meaning alone: the
+// scoreboard row also says it in words for screen readers, and a tick/cross follows the dots.
+export component TriesDots inherits Rectangle {
+    in property <int> tries;
+    in property <int> max: 6;
+    in property <DotStatus> status: DotStatus.playing;
+    in property <length> dot: 9px;
+    in property <length> gap: 4px;
+    width: root.max * (root.dot + root.gap) - root.gap;
+    height: root.dot;
+    for n in root.max: Rectangle {
+        x: n * (root.dot + root.gap);
+        width: root.dot;
+        height: root.dot;
+        border-radius: root.dot / 2;
+        border-width: 1.5px;
+        border-color: root.status == DotStatus.solved ? Theme.go : root.status == DotStatus.out ? Theme.signal-ink : Theme.ink;
+        background: n >= root.tries ? transparent : root.status == DotStatus.solved ? Theme.go : root.status == DotStatus.out ? Theme.signal-ink : Theme.ink;
+    }
+}
+
+// The host's crown. 14 × 11.
+export component Crown inherits Path {
+    width: 14px;
+    height: 11px;
+    viewbox-width: 14;
+    viewbox-height: 11;
+    commands: "M 1 10 L 1.8 3 L 4.8 6 L 7 1.5 L 9.2 6 L 12.2 3 L 13 10 Z";
+    fill: Theme.amber;
+    stroke: Theme.ink;
+    stroke-width: 1.2px;
+    stroke-line-join: round;
+}
+
+// A check mark (solved) or a cross (out of tries), 14 × 14.
+export component StatusGlyph inherits Path {
+    in property <bool> check: true;
+    width: 14px;
+    height: 14px;
+    viewbox-width: 14;
+    viewbox-height: 14;
+    commands: root.check ? "M 2 7.5 L 5.5 11 L 12 3" : "M 3 3 L 11 11 M 11 3 L 3 11";
+    stroke: root.check ? Theme.go : Theme.signal-ink;
+    stroke-width: 2px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    fill: transparent;
+}

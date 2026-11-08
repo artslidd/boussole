@@ -1,0 +1,290 @@
+// "Jouer en ligne": a nickname, then two ways in. Héberger une partie (primary: this computer
+// becomes the server) or Rejoindre (address + room code). Failures are shown under the cards,
+// in French, with what to do about them.
+
+import { Theme } from "theme.slint";
+import { HostChoice, MenuHelp } from "types.slint";
+import { Online } from "online-state.slint";
+import { ActionButton, TextField, RadioRows } from "online-widgets.slint";
+
+component Card inherits Rectangle {
+    in property <string> title;
+    border-radius: 14px;
+    border-width: 2px;
+    border-color: Theme.ink;
+    background: Theme.chart;
+    accessible-role: groupbox;
+    accessible-label: root.title;
+
+    Text {
+        x: 18px;
+        y: 14px;
+        width: parent.width - 36px;
+        text: root.title;
+        font-family: Theme.display-font;
+        font-size: 21px;
+        color: Theme.ink;
+    }
+}
+
+export component OnlineMenu inherits Rectangle {
+    public function focus-nickname() {
+        nickname.focus-field();
+    }
+
+    HorizontalLayout {
+        padding-left: 32px;
+        padding-right: 32px;
+        alignment: center;
+
+        VerticalLayout {
+            max-width: 860px;
+            horizontal-stretch: 1;
+            alignment: center;
+            padding-top: 12px;
+            padding-bottom: 16px;
+            spacing: 12px;
+
+            HorizontalLayout {
+                spacing: 24px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 4px;
+                    Text {
+                        text: "Jouer en ligne";
+                        font-family: Theme.display-font;
+                        font-size: 34px;
+                        color: Theme.ink;
+                    }
+
+                    Text {
+                        text: "L’un héberge la partie sur son ordinateur, les autres la rejoignent avec son adresse et un code.";
+                        font-size: 14px;
+                        color: Theme.ink-soft;
+                        wrap: word-wrap;
+                    }
+                }
+
+                nickname := TextField {
+                    width: 280px;
+                    label: "Pseudo";
+                    hint: "1 à 16 caractères";
+                    placeholder: "Votre pseudo";
+                    text <=> Online.nickname;
+                    error: Online.nickname-error;
+                    edited(text) => {
+                        Online.nickname-edited(text);
+                    }
+                    accepted => {
+                        Online.host();
+                    }
+                    init => {
+                        self.focus-field();
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 20px;
+                vertical-stretch: 0;
+
+                // --- Héberger -----------------------------------------------------------------
+                Card {
+                    title: "Héberger une partie";
+                    horizontal-stretch: 1;
+                    min-height: 262px;
+                    VerticalLayout {
+                        padding: 18px;
+                        padding-top: 52px;
+                        spacing: 10px;
+                        RadioRows {
+                            enabled: !Online.busy;
+                            selected: Online.host-choice == HostChoice.lan ? 0 : 1;
+                            title-a: "Réseau local";
+                            detail-a: "même Wi-Fi ou même maison";
+                            title-b: "Internet";
+                            detail-b: "tunnel gratuit, sans compte";
+                            chosen(index) => {
+                                Online.host-choice = index == 0 ? HostChoice.lan : HostChoice.tunnel;
+                            }
+                        }
+
+                        Text {
+                            text: Online.host-choice == HostChoice.lan ? "macOS peut demander d’autoriser les connexions entrantes : acceptez, sinon vos amis ne pourront pas vous rejoindre." : "Adresse publique temporaire, valable le temps de la partie. Nécessite cloudflared (gratuit).";
+                            font-size: 13px;
+                            color: Theme.ink-soft;
+                            wrap: word-wrap;
+                            vertical-stretch: 1;
+                        }
+
+                        ActionButton {
+                            text: "Héberger une partie";
+                            primary: true;
+                            enabled: !Online.busy;
+                            clicked => {
+                                Online.host();
+                            }
+                        }
+                    }
+                }
+
+                // --- Rejoindre ----------------------------------------------------------------
+                Card {
+                    title: "Rejoindre une partie";
+                    horizontal-stretch: 1;
+                    min-height: 262px;
+                    VerticalLayout {
+                        padding: 18px;
+                        padding-top: 50px;
+                        spacing: 8px;
+                        TextField {
+                            label: "Adresse";
+                            hint: "reçue de l’hôte";
+                            placeholder: "ws://… ou https://….trycloudflare.com";
+                            text <=> Online.address;
+                            error: Online.address-error;
+                            accepted => {
+                                Online.join();
+                            }
+                        }
+
+                        TextField {
+                            label: "Code de la salle";
+                            hint: "5 caractères";
+                            placeholder: "K7QX2";
+                            text <=> Online.code-input;
+                            error: Online.code-error;
+                            accepted => {
+                                Online.join();
+                            }
+                        }
+
+                        HorizontalLayout {
+                            spacing: 10px;
+                            ActionButton {
+                                text: "Rejoindre";
+                                primary: false;
+                                enabled: !Online.busy;
+                                horizontal-stretch: 1;
+                                clicked => {
+                                    Online.join();
+                                }
+                            }
+
+                            ActionButton {
+                                text: "Créer une salle";
+                                primary: false;
+                                enabled: !Online.busy;
+                                min-width: 140px;
+                                accessible-description: "Crée une salle sur le serveur dont vous avez saisi l’adresse";
+                                clicked => {
+                                    Online.create-room();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- Status: working, failed, or what to do about it ----------------------------------
+            Rectangle {
+                // always room for the longest message: an error never moves the forms
+                height: 104px;
+
+                if Online.busy: Rectangle {
+                    border-radius: 12px;
+                    background: Theme.amber-wash;
+                    accessible-role: text;
+                    accessible-label: Online.busy-text;
+                    accessible-live-region: polite;
+                    HorizontalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        spacing: 12px;
+                        alignment: start;
+                        // three dots that fill in turn
+                        Rectangle {
+                            width: 44px;
+                            for n in 3: Rectangle {
+                                x: n * 15px;
+                                y: (parent.height - self.height) / 2;
+                                width: 10px;
+                                height: 10px;
+                                border-radius: 5px;
+                                background: mod(floor(animation-tick() / 400ms), 3) == n ? Theme.ink : Theme.amber-deep;
+                            }
+                        }
+
+                        Text {
+                            text: Online.busy-text;
+                            font-size: 16px;
+                            font-weight: 600;
+                            color: Theme.ink;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                if !Online.busy && Online.error != "": Rectangle {
+                    border-radius: 12px;
+                    border-width: 2px;
+                    border-color: Theme.signal;
+                    background: Theme.signal-wash;
+                    accessible-role: groupbox;
+                    accessible-label: "Erreur";
+                    HorizontalLayout {
+                        padding: 14px;
+                        padding-left: 18px;
+                        spacing: 18px;
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            alignment: center;
+                            spacing: 4px;
+                            Text {
+                                text: Online.error;
+                                font-size: 16px;
+                                font-weight: 600;
+                                color: Theme.signal-ink;
+                                wrap: word-wrap;
+                                accessible-role: text;
+                                accessible-label: Online.error;
+                                accessible-live-region: assertive;
+                            }
+
+                            if Online.help == MenuHelp.tunnel-missing: Text {
+                                text: "Installez-le avec « brew install cloudflared » (macOS), ou depuis developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads. Vous pouvez aussi jouer en réseau local.";
+                                font-size: 13px;
+                                color: Theme.ink;
+                                wrap: word-wrap;
+                            }
+                        }
+
+                        if Online.help == MenuHelp.tunnel-missing: VerticalLayout {
+                            alignment: center;
+                            ActionButton {
+                                text: "Utiliser le réseau local";
+                                primary: true;
+                                compact: true;
+                                min-width: 190px;
+                                clicked => {
+                                    Online.use-local-network();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !Online.busy && Online.error == "": Text {
+                    x: 4px;
+                    width: parent.width - 8px;
+                    text: "Les parties se jouent de 2 à 8, en Course (tout le monde cherche la même ville) ou en Coopération (chacun son tour, six essais pour l’équipe).";
+                    font-size: 14px;
+                    color: Theme.ink-soft;
+                    wrap: word-wrap;
+                    vertical-alignment: top;
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,131 @@
+// Everything the online screens show and everything they can ask for, in one global: Rust
+// (src/online_ui.rs) writes the properties from the view-model (src/online/view.rs) and answers
+// the callbacks; the screens only draw and forward events.
+
+import { Level, BoardView, GuessRow, Suggestion, OnlineScreen, HostChoice, RoomMode, BannerKind, MenuHelp, PlayerRowView, ScoreRowView, ResultRowView, RankRowView, ShareAddressView } from "types.slint";
+
+export global Online {
+    // --- navigation ----------------------------------------------------------------------------
+    // Online mode is on screen (the solo screens are hidden).
+    in property <bool> active;
+    in property <OnlineScreen> screen: OnlineScreen.menu;
+    // Connection strip in the header
+    in property <BannerKind> banner-kind: BannerKind.none;
+    in property <string> banner-text;
+
+    // --- "En ligne" menu -------------------------------------------------------------------------
+    in-out property <string> nickname;
+    in-out property <string> address;
+    in-out property <string> code-input;
+    in-out property <HostChoice> host-choice: HostChoice.lan;
+    // A connection or the hosted server is starting
+    in property <bool> busy;
+    in property <string> busy-text;
+    in property <string> nickname-error;
+    in property <string> address-error;
+    in property <string> code-error;
+    // Connection / hosting failure, in French
+    in property <string> error;
+    in property <MenuHelp> help: MenuHelp.none;
+
+    // --- lobby -----------------------------------------------------------------------------------
+    in property <string> room-code;
+    in property <bool> code-copied;
+    in property <[ShareAddressView]> share-addresses;
+    in property <string> share-hint;
+    in property <[PlayerRowView]> players;
+    in property <string> players-title;
+    in property <bool> is-host;
+    in property <bool> can-start;
+    in property <string> start-hint;
+    in property <bool> settings-editable;
+    in property <string> settings-note;
+    in property <RoomMode> setting-mode: RoomMode.course;
+    in property <Level> setting-level: Level.facile;
+    in property <string> setting-rounds;
+    in property <string> setting-max-players;
+    in property <string> setting-time-label;
+    in property <string> setting-time;
+    in property <bool> rounds-can-dec;
+    in property <bool> rounds-can-inc;
+    in property <bool> players-can-dec;
+    in property <bool> players-can-inc;
+    in property <bool> time-can-dec;
+    in property <bool> time-can-inc;
+
+    // --- round and end of round ----------------------------------------------------------------
+    in property <string> mode-badge;
+    in property <string> round-label;
+    in property <bool> coop;
+    in property <string> clock-text;
+    in property <string> clock-caption;
+    in property <bool> clock-urgent;
+    // Bumped by Rust whenever the round (or its reveal state) changes, see Board
+    in property <int> board-version;
+    in property <string> ticks;
+    in property <string> north-tick;
+    in property <[ScoreRowView]> scoreboard;
+    in property <string> scoreboard-title;
+    in property <string> team-note;
+    in property <string> turn-banner;
+    in property <bool> my-turn;
+    in property <int> tries-used;
+    in property <int> max-tries: 6;
+    in property <[GuessRow]> history;
+    in property <string> history-title;
+    in-out property <string> query;
+    in property <[Suggestion]> suggestions;
+    in property <int> highlighted;
+    in property <bool> suggestions-open;
+    in property <bool> input-enabled;
+    in property <string> input-message;
+    in property <string> notice;
+
+    in property <bool> result-view;
+    in property <string> headline;
+    in property <bool> headline-good;
+    in property <string> countdown;
+    in property <bool> last-round;
+    in property <[ResultRowView]> results;
+    in property <string> results-title;
+
+    // --- final ranking --------------------------------------------------------------------------
+    in property <string> podium-title;
+    in property <[RankRowView]> ranking;
+    in property <string> team-total;
+
+    // --- leaving ---------------------------------------------------------------------------------
+    in property <bool> confirm-leave-open;
+    in property <string> leave-warning;
+
+    // --- events sent to Rust -----------------------------------------------------------------------
+    callback open();
+    callback back();
+    callback host();
+    callback join();
+    callback create-room();
+    callback use-local-network();
+    callback nickname-edited(string);
+    callback copy-code();
+    callback copy-address(int);
+    callback choose-mode(RoomMode);
+    callback choose-level(Level);
+    callback step-rounds(int);
+    callback step-players(int);
+    callback step-time(int);
+    callback start-match();
+    callback leave();
+    callback confirm-leave();
+    callback cancel-leave();
+    callback query-edited(string);
+    callback submit-guess(int);
+    callback move-highlight(int);
+    callback dismiss-suggestions();
+    callback toggle-browse();
+    callback show-ranking();
+    callback back-to-lobby();
+    callback back-to-menu();
+    // Wake-up from the network thread (the inbox has something for the UI thread)
+    callback pump();
+    pure callback compute-board(length, length, int) -> BoardView;
+}

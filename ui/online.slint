@@ -1,0 +1,250 @@
+// The online mode as a whole: a header shared by every online screen (mode badge, round clock,
+// connection banner, Retour / Quitter), the current screen, and the "Quitter fermera la partie"
+// confirmation. Shown by app.slint while `Online.active`; the solo screens are hidden then.
+
+import { Theme } from "theme.slint";
+import { OnlineScreen, BannerKind } from "types.slint";
+import { Online } from "online-state.slint";
+import { GhostButton, Mark } from "widgets.slint";
+import { ActionButton } from "online-widgets.slint";
+import { OnlineMenu } from "online-menu.slint";
+import { Lobby } from "online-lobby.slint";
+import { OnlineRound } from "online-round.slint";
+import { Podium } from "online-podium.slint";
+
+export { Online }
+
+component Header inherits Rectangle {
+    callback about();
+    height: 52px;
+
+    HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 12px;
+        spacing: 10px;
+
+        if Online.screen == OnlineScreen.menu: VerticalLayout {
+            alignment: center;
+            GhostButton {
+                text: "Retour";
+                accessible-description: "Revenir à l’écran d’accueil";
+                clicked => {
+                    Online.back();
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Mark { }
+        }
+
+        Text {
+            text: "Boussole";
+            font-family: Theme.display-font;
+            font-size: 26px;
+            color: Theme.ink;
+            vertical-alignment: center;
+        }
+
+        // The round clock (Course: time left in the round; Coopération: time left for the turn)
+        if Online.screen == OnlineScreen.round: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 34px;
+                width: clock-row.preferred-width;
+                border-radius: 17px;
+                border-width: 2px;
+                border-color: Online.clock-urgent ? Theme.signal : Theme.ink;
+                background: Online.clock-urgent ? Theme.signal-wash : Theme.chart;
+                accessible-role: text;
+                accessible-label: Online.clock-caption + " : " + Online.clock-text;
+                clock-row := HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 8px;
+                    Text {
+                        text: Online.clock-caption;
+                        font-size: 13px;
+                        color: Theme.ink-soft;
+                        vertical-alignment: center;
+                    }
+
+                    Text {
+                        text: Online.clock-text;
+                        min-width: 42px;
+                        font-size: 20px;
+                        font-weight: 600;
+                        color: Online.clock-urgent ? Theme.signal-ink : Theme.ink;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        // Connection banner: it lives in the header, so it never moves the board or the dock
+        if Online.banner-kind != BannerKind.none: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 32px;
+                width: banner-row.preferred-width;
+                border-radius: 16px;
+                border-width: 2px;
+                border-color: Online.banner-kind == BannerKind.lost ? Theme.signal : Theme.ink;
+                background: Online.banner-kind == BannerKind.lost ? Theme.signal-wash : Theme.amber-wash;
+                accessible-role: text;
+                accessible-label: Online.banner-text;
+                accessible-live-region: assertive;
+                banner-row := HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    spacing: 10px;
+                    Text {
+                        text: Online.banner-text;
+                        font-size: 14px;
+                        font-weight: 600;
+                        color: Online.banner-kind == BannerKind.lost ? Theme.signal-ink : Theme.ink;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+
+        if Online.banner-kind == BannerKind.lost: VerticalLayout {
+            alignment: center;
+            ActionButton {
+                text: "Retour au menu";
+                primary: true;
+                compact: true;
+                min-width: 130px;
+                clicked => {
+                    Online.back-to-menu();
+                }
+            }
+        }
+
+        if Online.screen == OnlineScreen.menu: VerticalLayout {
+            alignment: center;
+            GhostButton {
+                text: "À propos";
+                clicked => {
+                    root.about();
+                }
+            }
+        }
+
+        if Online.screen != OnlineScreen.menu: VerticalLayout {
+            alignment: center;
+            ActionButton {
+                text: "Quitter";
+                primary: false;
+                compact: true;
+                min-width: 96px;
+                accessible-description: Online.is-host ? "Ferme la partie pour tout le monde" : "Quitte la salle";
+                clicked => {
+                    Online.leave();
+                }
+            }
+        }
+    }
+}
+
+export component OnlineRoot inherits Rectangle {
+    callback about();
+    background: Theme.paper;
+
+    VerticalLayout {
+        Header {
+            about => {
+                root.about();
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            if Online.screen == OnlineScreen.menu: OnlineMenu { }
+            if Online.screen == OnlineScreen.lobby: Lobby { }
+            if Online.screen == OnlineScreen.round || Online.screen == OnlineScreen.result: OnlineRound { }
+            if Online.screen == OnlineScreen.podium: Podium { }
+        }
+    }
+
+    // "Quitter fermera la partie pour tout le monde" (the host leaving ends the game for all)
+    if Online.confirm-leave-open: Rectangle {
+        background: #0f2e358c;
+        TouchArea { }
+
+        FocusScope {
+            key-pressed(event) => {
+                if (event.text == Key.Escape) {
+                    Online.cancel-leave();
+                    return accept;
+                }
+                return reject;
+            }
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: min(500px, parent.width - 40px);
+                height: 232px;
+                border-radius: 14px;
+                border-width: 2px;
+                border-color: Theme.ink;
+                background: Theme.chart;
+                accessible-role: groupbox;
+                accessible-label: "Confirmation : " + Online.leave-warning;
+
+                VerticalLayout {
+                    padding: 24px;
+                    spacing: 10px;
+                    Text {
+                        text: Online.leave-warning;
+                        font-family: Theme.display-font;
+                        font-size: 24px;
+                        color: Theme.ink;
+                        wrap: word-wrap;
+                    }
+
+                    Text {
+                        text: "Les autres joueurs seront déconnectés et votre serveur sera arrêté.";
+                        font-size: 15px;
+                        color: Theme.ink-soft;
+                        wrap: word-wrap;
+                        vertical-stretch: 1;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 12px;
+                        alignment: end;
+                        ActionButton {
+                            text: "Rester";
+                            primary: true;
+                            min-width: 130px;
+                            init => {
+                                self.focus-button();
+                            }
+                            clicked => {
+                                Online.cancel-leave();
+                            }
+                        }
+
+                        ActionButton {
+                            text: "Fermer la partie";
+                            primary: false;
+                            min-width: 170px;
+                            clicked => {
+                                Online.confirm-leave();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

@@ -29,6 +29,10 @@ export struct GuessRow {
     // Spoken description of the direction, e.g. "au nord-est"
     direction: string,
     correct: bool,
+    // Online Coopération only (the history is shared): who guessed, and their initial for the
+    // little badge. Both empty in solo and in Course.
+    by: string,
+    initial: string,
 }
 
 export struct Suggestion {
@@ -53,4 +57,83 @@ export struct BoardView {
     revealed: bool,
     // Spoken summary of the board for assistive technology
     summary: string,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Online mode (see online-state.slint)
+// ---------------------------------------------------------------------------------------------
+
+// Which online screen is up.
+export enum OnlineScreen { menu, lobby, round, result, podium }
+
+// How to host: on the local network, or over the Internet through a free tunnel.
+export enum HostChoice { lan, tunnel }
+
+// Game mode of a room.
+export enum RoomMode { course, coop }
+
+// State of the connection strip in the header.
+export enum BannerKind { none, reconnecting, lost }
+
+// How a player stands in a Course round.
+export enum DotStatus { playing, solved, out }
+
+// Extra help shown under the host card.
+export enum MenuHelp { none, tunnel-missing }
+
+// A player of the lobby.
+export struct PlayerRowView {
+    name: string,
+    host: bool,
+    me: bool,
+    connected: bool,
+    // For screen readers: "Alice (hôte, vous)"
+    description: string,
+}
+
+// A line of the live scoreboard (Course) or of the turn order (Coopération): no city names.
+export struct ScoreRowView {
+    name: string,
+    me: bool,
+    host: bool,
+    connected: bool,
+    tries: int,
+    status: DotStatus,
+    // Coopération: holds the turn
+    active: bool,
+    description: string,
+}
+
+// A line of the end-of-round results.
+export struct ResultRowView {
+    name: string,
+    me: bool,
+    solved: bool,
+    found: bool,
+    // "+496"
+    points: string,
+    // "1 190"
+    total: string,
+    // "Lyon · Dijon · Besançon"
+    guesses: string,
+    description: string,
+}
+
+// A line of the final ranking.
+export struct RankRowView {
+    // "1", "2"…; empty in Coopération
+    rank: string,
+    name: string,
+    me: bool,
+    total: string,
+    // "3 manches trouvées"
+    detail: string,
+    first: bool,
+}
+
+// An address the host shares, with its copy feedback.
+export struct ShareAddressView {
+    label: string,
+    url: string,
+    copied: bool,
 }

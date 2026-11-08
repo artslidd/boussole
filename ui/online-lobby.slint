@@ -1,0 +1,397 @@
+// The lobby: the room code and (for the host) the address to share, the settings (editable by
+// the host only: everyone else sees them greyed out), the players, and "Lancer la partie".
+
+import { Theme } from "theme.slint";
+import { Level, RoomMode, ShareAddressView } from "types.slint";
+import { Online } from "online-state.slint";
+import { ActionButton, Segmented, Stepper, Crown } from "online-widgets.slint";
+
+component Panel inherits Rectangle {
+    in property <string> title;
+    border-radius: 14px;
+    border-width: 2px;
+    border-color: Theme.ink;
+    background: Theme.chart;
+    accessible-role: groupbox;
+    accessible-label: root.title;
+}
+
+// One address to share: what it is for, the address itself (selectable, read-only: if copying
+// is impossible the player can still select it) and a copy button.
+component ShareRow inherits Rectangle {
+    in property <ShareAddressView> entry;
+    callback copy();
+    height: 36px;
+
+    HorizontalLayout {
+        spacing: 8px;
+        Rectangle {
+            width: 82px;
+            height: 28px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 14px;
+            background: Theme.amber-wash;
+            border-width: 1.5px;
+            border-color: Theme.ink;
+            Text {
+                width: 100%;
+                height: 100%;
+                text: root.entry.label;
+                font-size: 12.5px;
+                font-weight: 600;
+                color: Theme.ink;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+            height: 34px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 8px;
+            border-width: 1.5px;
+            border-color: Theme.rule;
+            background: Theme.paper;
+            clip: true;
+            TextInput {
+                x: 8px;
+                width: parent.width - 16px;
+                height: parent.height;
+                read-only: true;
+                single-line: true;
+                text: root.entry.url;
+                font-size: 13.5px;
+                color: Theme.ink;
+                vertical-alignment: center;
+                accessible-role: text-input;
+                accessible-label: "Adresse à partager (" + root.entry.label + ")";
+                accessible-read-only: true;
+            }
+        }
+
+        ActionButton {
+            text: root.entry.copied ? "Copié" : "Copier";
+            accessible-description: "Copier l’adresse " + root.entry.url;
+            primary: false;
+            compact: true;
+            min-width: 72px;
+            y: (parent.height - self.height) / 2;
+            clicked => {
+                root.copy();
+            }
+        }
+    }
+}
+
+component PlayerLine inherits Rectangle {
+    in property <string> name;
+    in property <bool> host;
+    in property <bool> me;
+    in property <bool> connected;
+    in property <string> description;
+    height: 28px;
+    border-radius: 8px;
+    background: root.me ? Theme.amber-wash : transparent;
+    accessible-role: list-item;
+    accessible-label: root.description;
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+        Rectangle {
+            width: 14px;
+            if root.host: Crown {
+                y: (parent.height - self.height) / 2;
+            }
+        }
+
+        Text {
+            text: root.name;
+            font-size: 16px;
+            font-weight: 600;
+            color: root.connected ? Theme.ink : Theme.ink-soft;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+
+        if root.me: Text {
+            text: "vous";
+            font-size: 13px;
+            color: Theme.ink-soft;
+            vertical-alignment: center;
+        }
+
+        if !root.connected: Text {
+            text: "déconnecté";
+            font-size: 13px;
+            font-weight: 600;
+            color: Theme.signal-ink;
+            vertical-alignment: center;
+        }
+
+        // connected dot
+        Rectangle {
+            width: 10px;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 5px;
+                    border-width: 2px;
+                    border-color: root.connected ? Theme.go : Theme.signal-ink;
+                    background: root.connected ? Theme.go : transparent;
+                }
+            }
+        }
+    }
+}
+
+export component Lobby inherits Rectangle {
+    VerticalLayout {
+        padding: 16px;
+        padding-top: 12px;
+        spacing: 10px;
+
+        // --- Invite: code and address to share ------------------------------------------------
+        Panel {
+            title: "Inviter des joueurs";
+            min-height: Online.is-host ? 132px : 100px;
+            vertical-stretch: 0;
+            HorizontalLayout {
+                padding: 12px;
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 24px;
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 0px;
+                    Text {
+                        text: "Code de la salle";
+                        font-size: 14px;
+                        color: Theme.ink-soft;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 12px;
+                        alignment: start;
+                        code := Text {
+                            text: Online.room-code;
+                            font-family: Theme.display-font;
+                            font-size: 44px;
+                            color: Theme.ink;
+                            vertical-alignment: center;
+                            accessible-role: text;
+                            accessible-label: "Code de la salle : " + Online.room-code;
+                        }
+
+                        VerticalLayout {
+                            alignment: center;
+                            ActionButton {
+                                text: Online.code-copied ? "Copié" : "Copier";
+                                accessible-description: "Copier le code de la salle";
+                                primary: false;
+                                compact: true;
+                                min-width: 72px;
+                                clicked => {
+                                    Online.copy-code();
+                                }
+                            }
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 12px;
+                        Text {
+                            text: Online.is-host ? "Adresse à partager" : "Vous avez rejoint cette salle";
+                            font-size: 15px;
+                            font-weight: 600;
+                            color: Theme.ink;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            text: Online.share-hint;
+                            font-size: 14px;
+                            color: Online.notice != "" ? Theme.signal-ink : Theme.ink-soft;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                            overflow: elide;
+                            horizontal-stretch: 1;
+                            accessible-role: text;
+                            accessible-label: Online.share-hint;
+                            accessible-live-region: polite;
+                        }
+                    }
+
+                    for entry[index] in Online.share-addresses: ShareRow {
+                        entry: entry;
+                        copy => {
+                            Online.copy-address(index);
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 14px;
+            vertical-stretch: 1;
+
+            // --- Settings -----------------------------------------------------------------------
+            Panel {
+                title: "Réglages de la partie";
+                horizontal-stretch: 6;
+                min-width: 300px;
+                VerticalLayout {
+                    padding: 14px;
+                    padding-top: 12px;
+                    spacing: 6px;
+                    alignment: start;
+                    Text {
+                        text: "Réglages";
+                        font-family: Theme.display-font;
+                        font-size: 20px;
+                        color: Theme.ink;
+                    }
+
+                    Text {
+                        text: Online.settings-note;
+                        font-size: 13px;
+                        color: Theme.ink-soft;
+                        overflow: elide;
+                        height: 16px;
+                    }
+
+                    Segmented {
+                        label-a: "Course";
+                        label-b: "Coopération";
+                        selected: Online.setting-mode == RoomMode.course ? 0 : 1;
+                        enabled: Online.settings-editable;
+                        chosen(index) => {
+                            Online.choose-mode(index == 0 ? RoomMode.course : RoomMode.coop);
+                        }
+                    }
+
+                    Segmented {
+                        label-a: "Facile";
+                        label-b: "Difficile";
+                        selected: Online.setting-level == Level.facile ? 0 : 1;
+                        enabled: Online.settings-editable;
+                        chosen(index) => {
+                            Online.choose-level(index == 0 ? Level.facile : Level.difficile);
+                        }
+                    }
+
+                    Stepper {
+                        label: "Manches";
+                        value: Online.setting-rounds;
+                        enabled: Online.settings-editable;
+                        can-dec: Online.rounds-can-dec;
+                        can-inc: Online.rounds-can-inc;
+                        step(delta) => {
+                            Online.step-rounds(delta);
+                        }
+                    }
+
+                    Stepper {
+                        label: "Joueurs max";
+                        value: Online.setting-max-players;
+                        enabled: Online.settings-editable;
+                        can-dec: Online.players-can-dec;
+                        can-inc: Online.players-can-inc;
+                        step(delta) => {
+                            Online.step-players(delta);
+                        }
+                    }
+
+                    Stepper {
+                        label: Online.setting-time-label;
+                        value: Online.setting-time;
+                        enabled: Online.settings-editable;
+                        can-dec: Online.time-can-dec;
+                        can-inc: Online.time-can-inc;
+                        step(delta) => {
+                            Online.step-time(delta);
+                        }
+                    }
+                }
+            }
+
+            // --- Players and start --------------------------------------------------------------
+            Panel {
+                title: "Joueurs";
+                horizontal-stretch: 5;
+                min-width: 260px;
+                VerticalLayout {
+                    padding: 14px;
+                    padding-top: 12px;
+                    spacing: 2px;
+                    Text {
+                        text: Online.players-title;
+                        font-family: Theme.display-font;
+                        font-size: 20px;
+                        color: Theme.ink;
+                        accessible-role: text;
+                    }
+
+                    Rectangle {
+                        height: 2px;
+                    }
+
+                    for player in Online.players: PlayerLine {
+                        name: player.name;
+                        host: player.host;
+                        me: player.me;
+                        connected: player.connected;
+                        description: player.description;
+                    }
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                    }
+
+                    Rectangle {
+                        height: 4px;
+                    }
+
+                    Text {
+                        text: Online.start-hint;
+                        overflow: elide;
+                        font-size: 13px;
+                        color: Online.can-start ? Theme.go : Theme.ink-soft;
+                        font-weight: Online.can-start ? 600 : 400;
+                        accessible-role: text;
+                        accessible-label: Online.start-hint;
+                        accessible-live-region: polite;
+                    }
+
+                    ActionButton {
+                        text: "Lancer la partie";
+                        primary: true;
+                        enabled: Online.can-start;
+                        accessible-description: Online.start-hint;
+                        // As soon as a second player is there, the next Enter starts the match
+                        changed enabled => {
+                            if (self.enabled) {
+                                self.focus-button();
+                            }
+                        }
+                        clicked => {
+                            Online.start-match();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

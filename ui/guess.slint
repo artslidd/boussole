@@ -119,19 +119,29 @@ export component GuessInput inherits Rectangle {
     // Window size, to place the list in the dock next to the field.
     in property <length> window-width;
     in property <length> window-height;
+    // Online Coopération: not my turn. The field stays visible but cannot be edited or opened.
+    in property <bool> disabled: false;
+    in property <string> placeholder: "Tapez le nom d’une ville…";
     height: 46px;
 
     init => {
         input.focus();
     }
 
+    // Online Coopération: the field reopens on my turn, ready to type.
+    changed disabled => {
+        if (!root.disabled) {
+            input.focus();
+        }
+    }
+
     field := Rectangle {
         border-radius: 10px;
         border-width: 2px;
-        border-color: Theme.ink;
-        background: Theme.chart;
+        border-color: root.disabled ? Theme.rule : Theme.ink;
+        background: root.disabled ? Theme.paper : Theme.chart;
 
-        if input.has-focus: Rectangle {
+        if input.has-focus && !root.disabled: Rectangle {
             x: -5px;
             y: -5px;
             width: parent.width + 10px;
@@ -143,6 +153,9 @@ export component GuessInput inherits Rectangle {
 
         FocusScope {
             capture-key-pressed(event) => {
+                if (root.disabled) {
+                    return reject;
+                }
                 if (event.text == Key.UpArrow) {
                     root.move-highlight(-1);
                     return accept;
@@ -163,14 +176,16 @@ export component GuessInput inherits Rectangle {
                 width: parent.width - 28px - 40px;
                 height: parent.height;
                 single-line: true;
+                read-only: root.disabled;
                 text <=> root.text;
-                color: Theme.ink;
+                color: root.disabled ? Theme.ink-soft : Theme.ink;
                 font-size: 18px;
                 selection-background-color: Theme.amber;
                 selection-foreground-color: Theme.ink;
                 vertical-alignment: center;
                 accessible-role: text-input;
                 accessible-label: "Nom de la ville à deviner";
+                accessible-read-only: root.disabled;
                 edited => {
                     root.edited(self.text);
                 }
@@ -181,7 +196,7 @@ export component GuessInput inherits Rectangle {
         }
 
         // Chevron button
-        Rectangle {
+        if !root.disabled: Rectangle {
             x: parent.width - self.width - 4px;
             y: 4px;
             width: 36px;
@@ -222,7 +237,7 @@ export component GuessInput inherits Rectangle {
             x: 14px;
             width: parent.width - 28px - 40px;
             height: parent.height;
-            text: "Tapez le nom d’une ville…";
+            text: root.placeholder;
             color: Theme.ink-soft;
             font-size: 18px;
             vertical-alignment: center;
@@ -256,7 +271,7 @@ component GuessSlot inherits Rectangle {
     border-color: !root.filled ? Theme.rule : root.entry.correct ? Theme.go : Theme.ink;
     background: !root.filled ? transparent : root.entry.correct ? Theme.go-wash : Theme.chart;
     accessible-role: text;
-    accessible-label: !root.filled ? "Essai " + root.number + " : libre" : root.entry.correct ? "Essai " + root.number + " : " + root.entry.name + ", trouvé" : "Essai " + root.number + " : " + root.entry.name + ", à " + root.entry.distance + " " + root.entry.direction;
+    accessible-label: !root.filled ? "Essai " + root.number + " : libre" : root.entry.correct ? "Essai " + root.number + " : " + root.entry.name + ", trouvé" + (root.entry.by != "" ? " par " + root.entry.by : "") : "Essai " + root.number + " : " + root.entry.name + ", à " + root.entry.distance + " " + root.entry.direction + (root.entry.by != "" ? ", proposé par " + root.entry.by : "");
 
     if !root.filled: Text {
         x: 12px;
@@ -272,6 +287,27 @@ component GuessSlot inherits Rectangle {
         padding-left: 10px;
         padding-right: 10px;
         spacing: 8px;
+        // Online Coopération: the initial of whoever guessed (empty in solo and in Course)
+        if root.entry.initial != "": Rectangle {
+            width: 20px;
+            height: 20px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 10px;
+            border-width: 1.5px;
+            border-color: Theme.ink;
+            background: Theme.amber-wash;
+            Text {
+                width: 100%;
+                height: 100%;
+                text: root.entry.initial;
+                color: Theme.ink;
+                font-size: 12px;
+                font-weight: 600;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
         Text {
             text: root.entry.name;
             color: Theme.ink;
@@ -317,6 +353,6 @@ export component GuessHistory inherits Rectangle {
         width: root.slot-width;
         number: number + 1;
         filled: number < root.rows.length;
-        entry: number < root.rows.length ? root.rows[number] : { name: "", distance: "", arrow: "", direction: "", correct: false };
+        entry: number < root.rows.length ? root.rows[number] : { name: "", distance: "", arrow: "", direction: "", correct: false, by: "", initial: "" };
     }
 }

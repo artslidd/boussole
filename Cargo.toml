@@ -34,6 +34,8 @@ ttf-parser = "0.25"
 tokio = { workspace = true, features = ["rt", "net", "time", "sync", "macros"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# Copy buttons of the lobby (room code, address to share). Slint has no clipboard API for apps.
+arboard = { version = "3", default-features = false }
 # `wss://` needs a rustls crypto provider; install `ring` explicitly (see net::client) instead of
 # relying on feature auto-detection, which panics when two providers end up in the build.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

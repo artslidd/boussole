@@ -9,6 +9,7 @@ use crate::board::{self, HintLabel};
 use crate::cities::City;
 use crate::game::{Difficulty, Round, RoundStatus};
 use crate::geo::Compass8;
+use crate::online_ui::OnlineUi;
 use crate::session::{Phase as SessionPhase, Session, Submission};
 use slint::{ComponentHandle, ModelRc, VecModel};
 use std::cell::{Cell, Ref, RefCell};
@@ -81,9 +82,9 @@ pub fn result_message(round: &Round) -> (String, String, String) {
 
 /// What the board shows: the five hints, and the secret once the round is over.
 #[derive(Default)]
-struct BoardInput {
-    hints: Vec<HintLabel>,
-    revealed: Option<&'static City>,
+pub(crate) struct BoardInput {
+    pub(crate) hints: Vec<HintLabel>,
+    pub(crate) revealed: Option<&'static City>,
 }
 
 impl BoardInput {
@@ -103,7 +104,7 @@ impl BoardInput {
 }
 
 /// Compute everything the board draws for a canvas of `width × height` logical pixels.
-fn compute_board(width: f32, height: f32, input: &BoardInput) -> BoardView {
+pub(crate) fn compute_board(width: f32, height: f32, input: &BoardInput) -> BoardView {
     if width < 1.0 || height < 1.0 || input.hints.is_empty() {
         return BoardView::default();
     }
@@ -220,6 +221,8 @@ fn sync(window: &AppWindow, session: &Session) {
                     },
                     direction: direction_phrase(Compass8::from_bearing(guess.bearing_deg)).into(),
                     correct: guess.correct,
+                    by: Default::default(),
+                    initial: Default::default(),
                 })
                 .collect()
         })
@@ -269,6 +272,7 @@ impl Shared {
 pub struct App {
     window: AppWindow,
     shared: Rc<Shared>,
+    online: OnlineUi,
 }
 
 impl App {
@@ -382,7 +386,12 @@ impl App {
             }
         });
 
-        Ok(Self { window, shared })
+        let online = OnlineUi::new(&window);
+        Ok(Self {
+            window,
+            shared,
+            online,
+        })
     }
 
     /// A new window whose rounds are seeded from the system clock.
@@ -402,6 +411,11 @@ impl App {
 
     pub fn window(&self) -> &AppWindow {
         &self.window
+    }
+
+    /// The online mode of this window (hosting, joining, rooms).
+    pub fn online(&self) -> &OnlineUi {
+        &self.online
     }
 
     /// The session behind the window (read-only, for tests).

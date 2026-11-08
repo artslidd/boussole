@@ -1,0 +1,424 @@
+// A round in progress (Course or Coopération) and its end. Same bones as the solo screen: the
+// board on top (with a side panel for the players), a status strip, and a dock with the guess
+// field on the left and the history on the right. Header 52 + strip 46 + dock 168, as in solo.
+
+import { Theme } from "theme.slint";
+import { DotStatus, ScoreRowView, ResultRowView } from "types.slint";
+import { Online } from "online-state.slint";
+import { Board } from "board.slint";
+import { GuessInput, GuessHistory } from "guess.slint";
+import { ActionButton, TriesDots, Crown, StatusGlyph } from "online-widgets.slint";
+
+// Width of the player panel on the right of the board.
+export global PanelMetrics {
+    out property <length> width: 236px;
+}
+
+// One player of the live scoreboard (Course: tries as dots, tick when solved, cross when out
+// of tries) or of the turn order (Coopération: the player who holds the turn is highlighted).
+component ScoreLine inherits Rectangle {
+    in property <ScoreRowView> entry;
+    in property <int> max-tries;
+    in property <bool> coop;
+    height: 30px;
+    border-radius: 8px;
+    background: root.entry.active ? Theme.amber : root.entry.me ? Theme.amber-wash : transparent;
+    opacity: root.entry.connected ? 1.0 : 0.55;
+    accessible-role: list-item;
+    accessible-label: root.entry.description;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 6px;
+        Rectangle {
+            width: 14px;
+            if root.entry.host: Crown {
+                y: (parent.height - self.height) / 2;
+            }
+        }
+
+        Text {
+            text: root.entry.name;
+            font-size: 15px;
+            font-weight: 600;
+            color: Theme.ink;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+
+        if root.coop && root.entry.active: Path {
+            width: 10px;
+            height: 12px;
+            y: (parent.height - self.height) / 2;
+            viewbox-width: 10;
+            viewbox-height: 12;
+            commands: "M 1 1 L 9 6 L 1 11 Z";
+            fill: Theme.ink;
+            stroke: Theme.ink;
+            stroke-width: 1px;
+            stroke-line-join: round;
+        }
+
+        if !root.coop: VerticalLayout {
+            alignment: center;
+            TriesDots {
+                tries: root.entry.tries;
+                max: root.max-tries;
+                status: root.entry.status;
+            }
+        }
+
+        if !root.coop: Rectangle {
+            width: 14px;
+            if root.entry.status == DotStatus.solved: StatusGlyph {
+                y: (parent.height - self.height) / 2;
+                check: true;
+            }
+            if root.entry.status == DotStatus.out: StatusGlyph {
+                y: (parent.height - self.height) / 2;
+                check: false;
+            }
+        }
+    }
+}
+
+// One player of the end-of-round results: name and points, then every guess (revealed only now).
+component ResultLine inherits Rectangle {
+    in property <ResultRowView> entry;
+    in property <bool> coop;
+    height: 34px;
+    border-radius: 8px;
+    background: root.entry.found ? Theme.go-wash : root.entry.me ? Theme.amber-wash : transparent;
+    accessible-role: list-item;
+    accessible-label: root.entry.description;
+
+    VerticalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-top: 1px;
+        padding-bottom: 1px;
+        HorizontalLayout {
+            spacing: 6px;
+            if root.entry.solved || root.entry.found: StatusGlyph {
+                y: 2px;
+                check: true;
+            }
+            Text {
+                text: root.entry.name;
+                font-size: 15px;
+                font-weight: 600;
+                color: Theme.ink;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+
+            if root.entry.points != "": Text {
+                text: root.entry.points;
+                font-size: 15px;
+                font-weight: 600;
+                color: root.entry.solved ? Theme.go : Theme.ink-soft;
+            }
+        }
+
+        Text {
+            text: root.entry.guesses;
+            font-size: 12.5px;
+            color: Theme.ink-soft;
+            overflow: elide;
+        }
+    }
+}
+
+component SidePanel inherits Rectangle {
+    width: PanelMetrics.width;
+    background: Theme.chart;
+    // Eight rows must fit in the board's height at the minimum window size: never let the
+    // panel push the board (and the dock below it) out of the window.
+    min-height: 0px;
+    clip: true;
+
+    Rectangle {
+        x: 0px;
+        width: 1px;
+        background: Theme.ink;
+    }
+
+    VerticalLayout {
+        padding: 12px;
+        padding-left: 14px;
+        padding-top: 10px;
+        spacing: 2px;
+        alignment: start;
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: Online.result-view ? Online.results-title : Online.scoreboard-title;
+                font-size: 14px;
+                font-weight: 600;
+                color: Theme.ink;
+                accessible-role: text;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+
+            if Online.team-note != "": Text {
+                text: Online.team-note;
+                font-size: 13px;
+                font-weight: 600;
+                color: Theme.go;
+                horizontal-alignment: right;
+                overflow: elide;
+            }
+        }
+
+        Rectangle {
+            height: 4px;
+        }
+
+        if !Online.result-view: VerticalLayout {
+            spacing: 2px;
+            accessible-role: list;
+            accessible-label: Online.scoreboard-title;
+            for row in Online.scoreboard: ScoreLine {
+                entry: row;
+                max-tries: Online.max-tries;
+                coop: Online.coop;
+            }
+        }
+
+        if Online.result-view: VerticalLayout {
+            spacing: 1px;
+            accessible-role: list;
+            accessible-label: Online.results-title;
+            for row in Online.results: ResultLine {
+                entry: row;
+                coop: Online.coop;
+            }
+        }
+    }
+}
+
+export component OnlineRound inherits Rectangle {
+    VerticalLayout {
+        // Board and players
+        HorizontalLayout {
+            vertical-stretch: 1;
+            Board {
+                horizontal-stretch: 1;
+                ticks: Online.ticks;
+                north-tick: Online.north-tick;
+                version: Online.board-version;
+                compute(width, height, version) => {
+                    return Online.compute-board(width, height, version);
+                }
+            }
+
+            SidePanel { }
+        }
+
+        // Status strip: tries and turn while playing, the verdict at the end of a round
+        Rectangle {
+            height: 46px;
+            background: Online.result-view ? (Online.headline-good ? Theme.go-wash : Theme.signal-wash) : (Online.coop ? (Online.my-turn ? Theme.go-wash : Theme.amber-wash) : Theme.rule);
+            accessible-role: text;
+            accessible-label: Online.result-view ? Online.headline : Online.coop ? Online.turn-banner + ". Essai " + (Online.tries-used + 1) + " sur " + Online.max-tries : "Manche : " + Online.round-label + ". Essai " + (Online.tries-used + 1) + " sur " + Online.max-tries;
+            accessible-live-region: polite;
+
+            if !Online.result-view: HorizontalLayout {
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 16px;
+                if Online.coop: Text {
+                    text: Online.turn-banner;
+                    font-family: Theme.display-font;
+                    font-size: 21px;
+                    color: Online.my-turn ? Theme.go : Theme.ink;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "Essai " + min(Online.tries-used + 1, Online.max-tries) + " / " + Online.max-tries + (Online.coop ? " (équipe)" : "");
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    width: Online.max-tries * 18px;
+                    for n in Online.max-tries: Rectangle {
+                        x: n * 18px;
+                        y: (parent.height - self.height) / 2;
+                        width: 12px;
+                        height: 12px;
+                        border-radius: 6px;
+                        border-width: 2px;
+                        border-color: Theme.ink;
+                        background: n < Online.tries-used ? Theme.ink : transparent;
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Text {
+                    text: Online.round-label;
+                    font-size: 15px;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                }
+            }
+
+            if Online.result-view: HorizontalLayout {
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 16px;
+                Text {
+                    text: Online.headline;
+                    font-family: Theme.display-font;
+                    font-size: 21px;
+                    color: Online.headline-good ? Theme.go : Theme.ink;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+
+                Text {
+                    text: Online.round-label;
+                    font-size: 15px;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                }
+            }
+        }
+
+        // Dock: the guess field (or the countdown) on the left, the history on the right
+        Rectangle {
+            height: 168px;
+            background: Theme.chart;
+            Rectangle {
+                y: 0px;
+                height: 1px;
+                background: Theme.ink;
+            }
+
+            HorizontalLayout {
+                padding: 14px;
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 28px;
+
+                Rectangle {
+                    horizontal-stretch: 4;
+                    min-width: 300px;
+                    max-width: 420px;
+
+                    if !Online.result-view: VerticalLayout {
+                        alignment: start;
+                        spacing: 6px;
+                        Text {
+                            text: "Quelle est la ville cachée ?";
+                            font-size: 16px;
+                            font-weight: 600;
+                            color: Theme.ink;
+                        }
+
+                        GuessInput {
+                            window-width: root.width;
+                            window-height: root.height;
+                            disabled: !Online.input-enabled;
+                            placeholder: Online.input-enabled ? "Tapez le nom d’une ville…" : "En attente…";
+                            text <=> Online.query;
+                            suggestions: Online.suggestions;
+                            highlighted: Online.highlighted;
+                            open: Online.suggestions-open && Online.input-enabled;
+                            edited(text) => {
+                                Online.query-edited(text);
+                            }
+                            submit(index) => {
+                                Online.submit-guess(index);
+                            }
+                            move-highlight(delta) => {
+                                Online.move-highlight(delta);
+                            }
+                            dismiss => {
+                                Online.dismiss-suggestions();
+                            }
+                            toggle-browse => {
+                                Online.toggle-browse();
+                            }
+                        }
+
+                        Text {
+                            text: Online.notice != "" ? Online.notice : Online.input-message != "" ? Online.input-message : "Haut/Bas : choisir · Entrée : valider · Échap : fermer";
+                            font-size: 14px;
+                            font-weight: Online.notice != "" || Online.input-message != "" ? 600 : 400;
+                            color: Online.notice != "" ? Theme.signal-ink : Online.input-message != "" ? Theme.ink : Theme.ink-soft;
+                            wrap: word-wrap;
+                            accessible-role: text;
+                            accessible-label: Online.notice != "" ? Online.notice : Online.input-message;
+                            accessible-live-region: polite;
+                        }
+                    }
+
+                    if Online.result-view: VerticalLayout {
+                        alignment: start;
+                        spacing: 10px;
+                        Text {
+                            text: Online.countdown;
+                            font-family: Theme.display-font;
+                            font-size: 24px;
+                            color: Theme.ink;
+                            wrap: word-wrap;
+                            accessible-role: text;
+                            accessible-label: Online.countdown;
+                        }
+
+                        if Online.last-round: ActionButton {
+                            text: "Voir le classement";
+                            primary: true;
+                            compact: true;
+                            min-width: 200px;
+                            init => {
+                                self.focus-button();
+                            }
+                            clicked => {
+                                Online.show-ranking();
+                            }
+                        }
+
+                        if !Online.last-round: Text {
+                            text: "Préparez-vous : la ville change à chaque manche.";
+                            font-size: 14px;
+                            color: Theme.ink-soft;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 6;
+                    spacing: 6px;
+                    Text {
+                        text: Online.history-title;
+                        font-size: 14px;
+                        color: Theme.ink-soft;
+                        overflow: elide;
+                        visible: !Online.suggestions-open;
+                    }
+
+                    GuessHistory {
+                        rows: Online.history;
+                        height: 3 * 32px + 2 * 6px;
+                        visible: !Online.suggestions-open;
+                    }
+                }
+            }
+        }
+    }
+}

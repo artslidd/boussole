@@ -631,6 +631,7 @@ dependencies = [
 name = "boussole"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "boussole-core",
  "boussole-protocol",
  "futures-util",

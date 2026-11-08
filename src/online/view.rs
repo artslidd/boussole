@@ -76,7 +76,7 @@ pub fn banner(state: &OnlineState, now: Instant) -> Option<Banner> {
             })
         }
         Link::Lost => Some(Banner::Lost {
-            text: "Connexion perdue : la partie n’est plus accessible.".to_owned(),
+            text: "Connexion perdue".to_owned(),
         }),
         Link::Connecting | Link::Online => None,
     }
@@ -184,9 +184,9 @@ pub fn lobby(state: &OnlineState) -> Option<LobbyView> {
             None => "En attente du lancement par l’hôte…".to_owned(),
         }
     } else if connected < 2 {
-        "Il faut au moins 2 joueurs connectés pour lancer la partie.".to_owned()
+        "Il faut au moins 2 joueurs connectés.".to_owned()
     } else {
-        "Lancez la partie quand tout le monde est là.".to_owned()
+        "Lancez quand tout le monde est là.".to_owned()
     };
     Some(LobbyView {
         code: room.code.clone(),

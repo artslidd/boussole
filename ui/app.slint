@@ -6,47 +6,15 @@
 import { AboutSlint } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Phase, Level, ArrowView, LabelView, GuessRow, Suggestion, BoardView } from "types.slint";
-import { PrimaryButton, GhostButton, LevelPicker, DialFace } from "widgets.slint";
+import { PrimaryButton, GhostButton, LevelPicker, DialFace, Mark } from "widgets.slint";
 import { Board } from "board.slint";
 import { GuessInput, GuessHistory } from "guess.slint";
+import { OnlineRoot, Online } from "online.slint";
+import { ActionButton } from "online-widgets.slint";
 
 export { Phase, Level, ArrowView, LabelView, GuessRow, Suggestion, BoardView }
-
-component Mark inherits Rectangle {
-    // Tiny compass mark in front of the title
-    in property <length> size: 26px;
-    width: root.size;
-    height: root.size;
-    Rectangle {
-        border-radius: root.size / 2;
-        border-width: 2px;
-        border-color: Theme.ink;
-    }
-
-    Path {
-        width: 100%;
-        height: 100%;
-        viewbox-width: 26;
-        viewbox-height: 26;
-        commands: "M 13 3.5 L 16.2 13 L 13 13 Z";
-        fill: Theme.signal;
-        stroke: Theme.signal;
-        stroke-width: 1px;
-        stroke-line-join: round;
-    }
-
-    Path {
-        width: 100%;
-        height: 100%;
-        viewbox-width: 26;
-        viewbox-height: 26;
-        commands: "M 13 22.5 L 9.8 13 L 13 13 Z";
-        fill: Theme.ink;
-        stroke: Theme.ink;
-        stroke-width: 1px;
-        stroke-line-join: round;
-    }
-}
+export { Online }
+export { OnlineScreen, HostChoice, RoomMode, BannerKind, DotStatus, MenuHelp, PlayerRowView, ScoreRowView, ResultRowView, RankRowView, ShareAddressView } from "types.slint";
 
 export component AppWindow inherits Window {
     title: "Boussole";
@@ -101,7 +69,7 @@ export component AppWindow inherits Window {
     // ======================================================================================
     // Start screen
     // ======================================================================================
-    if root.phase == Phase.setup: Rectangle {
+    if !Online.active && root.phase == Phase.setup: Rectangle {
         HorizontalLayout {
             padding-left: 40px;
             padding-right: 40px;
@@ -197,14 +165,22 @@ export component AppWindow inherits Window {
                         }
                     }
 
-                    Text {
-                        text: "Flèches gauche et droite pour choisir, Entrée pour jouer";
-                        font-size: 13px;
-                        color: Theme.ink-soft;
-                        wrap: word-wrap;
-                        vertical-alignment: center;
-                        max-width: 200px;
+                    ActionButton {
+                        text: "Jouer en ligne";
+                        primary: false;
+                        min-width: 170px;
+                        accessible-description: "Héberger une partie ou rejoindre celle d’un ami";
+                        clicked => {
+                            Online.open();
+                        }
                     }
+                }
+
+                Text {
+                    text: "Flèches gauche et droite pour choisir, Entrée pour jouer";
+                    font-size: 13px;
+                    color: Theme.ink-soft;
+                    wrap: word-wrap;
                 }
             }
         }
@@ -226,7 +202,7 @@ export component AppWindow inherits Window {
     // ======================================================================================
     // Header 52 + status strip 46 + dock 168 px; the board gets the rest of the height
     // (tests/ui_flow.rs and tests/board_layout.rs rely on these numbers).
-    if root.phase != Phase.setup: VerticalLayout {
+    if !Online.active && root.phase != Phase.setup: VerticalLayout {
         // Header
         Rectangle {
             height: 52px;
@@ -499,6 +475,17 @@ export component AppWindow inherits Window {
                     }
                 }
             }
+        }
+    }
+
+    // ======================================================================================
+    // Online mode (host / join, lobby, rounds): covers the solo screens while it is on
+    // ======================================================================================
+    if Online.active: OnlineRoot {
+        width: root.width;
+        height: root.height;
+        about => {
+            root.show-about();
         }
     }
 

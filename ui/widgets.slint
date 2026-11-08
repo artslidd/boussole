@@ -457,3 +457,39 @@ export component CompassRose inherits Rectangle {
         vertical-alignment: center;
     }
 }
+
+export component Mark inherits Rectangle {
+    // Tiny compass mark in front of the title
+    in property <length> size: 26px;
+    width: root.size;
+    height: root.size;
+    Rectangle {
+        border-radius: root.size / 2;
+        border-width: 2px;
+        border-color: Theme.ink;
+    }
+
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 26;
+        viewbox-height: 26;
+        commands: "M 13 3.5 L 16.2 13 L 13 13 Z";
+        fill: Theme.signal;
+        stroke: Theme.signal;
+        stroke-width: 1px;
+        stroke-line-join: round;
+    }
+
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 26;
+        viewbox-height: 26;
+        commands: "M 13 22.5 L 9.8 13 L 13 13 Z";
+        fill: Theme.ink;
+        stroke: Theme.ink;
+        stroke-width: 1px;
+        stroke-line-join: round;
+    }
+}
