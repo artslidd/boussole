@@ -96,7 +96,7 @@ From the start screen choose **Jouer en ligne**, type a **Pseudo** (1 to 16 char
 | You want to… | Do this |
 |---|---|
 | **host** a game for friends | **Héberger une partie**. Your computer runs the server inside the app. Pick *Réseau local* (same Wi-Fi: friends use a `ws://192.168.…:7878/ws` address) or *Internet* (a free Cloudflare quick tunnel: friends use a `wss://….trycloudflare.com/ws` address; needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/), `brew install cloudflared` on macOS, no account). The lobby then shows the **room code** and the **Adresse à partager**, each with a **Copier** button. |
-| **join** a friend's game | **Rejoindre**: paste the address you were given and type the 5-character room code (any case). Accepted addresses: `ws://…`, `wss://…`, a bare `host:port` (becomes `ws://host:port/ws`, port 7878 if omitted) or a pasted `https://….trycloudflare.com` (becomes `wss://….trycloudflare.com/ws`). |
+| **join** a friend's game | **Rejoindre**: paste the address you were given and type the 5-character room code (any case). Accepted addresses: `ws://…`, `wss://…`, a bare `host:port` (becomes `ws://host:port/ws`; a bare `host` takes port 7878, while `ws://host` keeps port 80 and `wss://host` port 443) or a pasted `https://….trycloudflare.com` (becomes `wss://….trycloudflare.com/ws`). |
 | use a **standalone server** | Type its address and press **Créer une salle** (or **Rejoindre** with a code). |
 
 ![The En ligne screen](docs/screenshots/online/01-menu.png)

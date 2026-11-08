@@ -1251,6 +1251,43 @@ fn the_host_edits_the_settings_and_each_change_is_sent_to_the_server() {
 }
 
 #[test]
+fn a_setting_the_server_refuses_goes_back_to_what_the_room_has() {
+    let (ui, server, _host) = hosted(HostChoice::Lan);
+    server.send(lobby_msg(
+        course_config(),
+        vec![
+            player(1, "Alice", true, true),
+            player(2, "Bob", false, true),
+        ],
+    ));
+    ui.wait("two players", |ui| ui.online().get_can_start());
+    ui.click("Coopération", Some(AccessibleRole::RadioButton));
+    assert!(matches!(
+        ui.next_msg(&server),
+        ClientMsg::UpdateConfig { .. }
+    ));
+    assert_eq!(
+        ui.online().get_setting_mode(),
+        RoomMode::Coop,
+        "shown at once while the server decides"
+    );
+    // the server says no and keeps the room as it was
+    server.send(ServerMsg::error(ErrorCode::InvalidConfig));
+    ui.wait("the refusal", |ui| {
+        ui.online().get_setting_mode() == RoomMode::Course
+    });
+    // the next change builds on the room's real settings, not on the refused one
+    ui.button("Manches : augmenter");
+    match ui.next_msg(&server) {
+        ClientMsg::UpdateConfig { config } => {
+            assert_eq!(config.mode, Mode::Course, "the refused mode is forgotten");
+            assert_eq!(config.rounds, 6);
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
 fn a_guest_sees_the_settings_but_every_control_is_disabled() {
     let (ui, server) = joined(course_config(), alice_and_bob());
     assert!(!ui.online().get_settings_editable());

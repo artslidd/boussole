@@ -42,7 +42,8 @@ impl std::error::Error for AddressError {}
 ///
 /// * `ws://` / `wss://` URLs are kept; a missing path becomes `/ws`.
 /// * `http://` and `https://` become `ws://` and `wss://` (a tunnel URL pasted from a browser).
-/// * `host:port` becomes `ws://host:port/ws`; a bare `host` takes port 7878.
+/// * `host:port` becomes `ws://host:port/ws`; a bare `host` takes port 7878 (an explicit
+///   `ws://host` keeps the scheme's default port, 80, like `wss://host` keeps 443).
 /// * Hosts under `trycloudflare.com`, and port 443, are secure (`wss://`, no explicit port).
 pub fn normalize_address(raw: &str) -> Result<String, AddressError> {
     let raw = raw.trim();
@@ -75,6 +76,9 @@ pub fn normalize_address(raw: &str) -> Result<String, AddressError> {
     let authority = match (port, secure) {
         (Some(443), true) | (None, true) => host.clone(),
         (Some(port), _) => format!("{host}:{port}"),
+        // A scheme that was typed keeps its own default port (80); only a bare host is taken
+        // for a game server and gets ours.
+        (None, false) if explicit_scheme.is_some() => host.clone(),
         (None, false) => format!("{host}:{DEFAULT_PORT}"),
     };
     let path = match path_and_query {
@@ -162,6 +166,19 @@ mod tests {
             ok("wss://example.org/boussole/ws"),
             "wss://example.org/boussole/ws"
         );
+    }
+
+    #[test]
+    fn an_explicit_scheme_without_a_port_keeps_that_schemes_default_port() {
+        // 7878 is only the answer to a bare host: `ws://` means port 80, `wss://` port 443
+        assert_eq!(ok("ws://jeu.example.org"), "ws://jeu.example.org/ws");
+        assert_eq!(ok("ws://192.168.1.20/ws"), "ws://192.168.1.20/ws");
+        assert_eq!(ok("http://jeu.example.org"), "ws://jeu.example.org/ws");
+        assert_eq!(ok("wss://jeu.example.org"), "wss://jeu.example.org/ws");
+        assert_eq!(ok("https://jeu.example.org"), "wss://jeu.example.org/ws");
+        // …and a port that is given is always kept
+        assert_eq!(ok("http://192.168.1.20:7878"), "ws://192.168.1.20:7878/ws");
+        assert_eq!(ok("ws://localhost:80/ws"), "ws://localhost:80/ws");
     }
 
     #[test]

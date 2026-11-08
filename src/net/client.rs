@@ -290,7 +290,9 @@ async fn open(
         let (mut socket, _response) = tokio_tungstenite::connect_async_with_config(
             config.url.as_str(),
             Some(ws_config),
-            false,
+            // Small messages (a guess, a hint request) go out at once instead of waiting for
+            // Nagle's algorithm to batch them: a guess and its answer are a round trip.
+            true,
         )
         .await
         .map_err(|error| match error {

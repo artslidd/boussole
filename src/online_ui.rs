@@ -798,7 +798,9 @@ impl OnlineUi {
             let before = std::mem::take(&mut core.state);
             core.state = apply(before, msg, now);
 
-            if is_snapshot {
+            // What the server answers is the truth: its snapshot, or its refusal (the room keeps
+            // the settings it had).
+            if is_snapshot || is_error {
                 core.pending_config = None;
             }
             if new_round {
