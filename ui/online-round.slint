@@ -329,8 +329,10 @@ export component OnlineRound inherits Rectangle {
                         }
 
                         GuessInput {
-                            window-width: root.width;
-                            window-height: root.height;
+                            // The suggestion list is placed against the window's bottom edge: this
+                            // area starts below the header, so add the header's height back.
+                            window-width: root.absolute-position.x + root.width;
+                            window-height: root.absolute-position.y + root.height;
                             disabled: !Online.input-enabled;
                             placeholder: Online.input-enabled ? "Tapez le nom d’une ville…" : "En attente…";
                             text <=> Online.query;

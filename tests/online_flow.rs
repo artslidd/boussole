@@ -1182,6 +1182,48 @@ fn a_course_guess_goes_out_with_the_keyboard_and_comes_back_in_the_history() {
     );
 }
 
+/// Typing opens the suggestion list in the dock: like in solo it must never cover the board
+/// (its top is at or below the board's bottom edge) and must stay inside the window.
+fn suggestions_stay_off_the_board(width: u32, height: u32) {
+    let (ui, server) = joined_at(width, height, course_config(), alice_and_bob());
+    start_round(
+        &server,
+        course_config(),
+        alice_and_bob(),
+        round_started(fixture!("round_started_course_facile")),
+    );
+    ui.wait("the round", |ui| ui.screen() == OnlineScreen::Round);
+    ui.h.type_text("sa");
+    let list = ui.element("Suggestions de villes", Some(AccessibleRole::List));
+    let top = list.absolute_position().y;
+    let bottom = top + list.size().height;
+    let board_bottom = height as f32 - 46.0 - 168.0;
+    assert!(
+        top >= board_bottom - 0.5,
+        "the list (top {top}) covers the board (bottom {board_bottom}) at {width}×{height}"
+    );
+    assert!(
+        bottom <= height as f32 + 0.5,
+        "the list is inside the window"
+    );
+    // typing a full list too
+    ui.key(Key::Escape);
+    ui.key(Key::Escape);
+    ui.key(Key::DownArrow);
+    let list = ui.element("Suggestions de villes", Some(AccessibleRole::List));
+    assert!(list.absolute_position().y >= board_bottom - 0.5);
+}
+
+#[test]
+fn the_suggestion_list_does_not_cover_the_board_at_the_default_size() {
+    suggestions_stay_off_the_board(1000, 760);
+}
+
+#[test]
+fn the_suggestion_list_does_not_cover_the_board_at_the_minimum_size() {
+    suggestions_stay_off_the_board(800, 600);
+}
+
 #[test]
 fn a_server_refusal_reopens_the_field_and_explains() {
     let (ui, server) = course_round();
