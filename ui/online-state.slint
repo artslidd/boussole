@@ -125,6 +125,8 @@ export global Online {
     callback show-ranking();
     callback back-to-lobby();
     callback back-to-menu();
+    // The application menu's Quit (⌘Q on macOS): handled like closing the window.
+    callback quit-requested();
     // Wake-up from the network thread (the inbox has something for the UI thread)
     callback pump();
     pure callback compute-board(length, length, int) -> BoardView;

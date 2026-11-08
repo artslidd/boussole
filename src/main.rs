@@ -19,6 +19,11 @@ fn main() -> Result<(), slint::PlatformError> {
     // "Héberger une partie" runs the Boussole server inside this process (and, on request, a
     // free Cloudflare tunnel). Nothing starts until the player asks for it.
     app.online().set_host(Arc::new(EmbeddedHost::new()));
+    // ⌘Q goes through the same path as closing the window (the host is asked first, the server
+    // and tunnel are stopped).
+    if let Err(why) = app.online().install_quit_hook() {
+        eprintln!("boussole: ⌘Q will not ask before closing a hosted game ({why})");
+    }
     app.run()
 }
 

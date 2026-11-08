@@ -1041,6 +1041,82 @@ fn a_start_that_can_be_aborted_is_aborted_at_once_when_the_window_closes() {
     assert!(!host.is_running());
 }
 
+// --- Quit from the application menu (⌘Q) goes the same way as closing the window --------------
+
+#[test]
+fn quit_from_the_app_menu_as_host_asks_first_then_closes_the_game_and_the_window() {
+    let (ui, server, host) = hosted(HostChoice::Lan);
+    assert!(ui.app.window().window().is_visible());
+    ui.online().invoke_quit_requested(); // what ⌘Q / the app menu's Quit ends up calling
+    assert!(
+        ui.online().get_confirm_leave_open(),
+        "the host is warned first"
+    );
+    assert!(
+        ui.app.window().window().is_visible(),
+        "and nothing closed yet"
+    );
+    assert_eq!(host.stops(), 0);
+
+    // Esc cancels: the game goes on
+    ui.key(Key::Escape);
+    assert!(!ui.online().get_confirm_leave_open());
+    assert!(ui.app.window().window().is_visible());
+
+    ui.online().invoke_quit_requested();
+    ui.button("Fermer la partie");
+    assert_eq!(ui.next_msg(&server), ClientMsg::LeaveRoom);
+    assert!(
+        !ui.app.window().window().is_visible(),
+        "the window closes after the confirmation"
+    );
+    assert!(
+        ui.app
+            .online()
+            .wait_for_pending_stops(Duration::from_secs(5))
+    );
+    assert_eq!(host.stops(), 1, "the server and tunnel were stopped");
+}
+
+#[test]
+fn quit_from_the_app_menu_as_a_guest_leaves_the_room_and_closes_at_once() {
+    let (ui, server) = joined(course_config(), alice_and_bob());
+    ui.online().invoke_quit_requested();
+    assert!(
+        !ui.online().get_confirm_leave_open(),
+        "nothing to confirm for a guest"
+    );
+    assert_eq!(ui.next_msg(&server), ClientMsg::LeaveRoom);
+    assert!(!ui.app.window().window().is_visible());
+}
+
+#[test]
+fn quit_from_the_app_menu_in_solo_mode_just_closes_the_window() {
+    let ui = ui(1000, 760);
+    ui.online().invoke_quit_requested();
+    assert!(!ui.app.window().window().is_visible());
+}
+
+#[test]
+fn quit_from_the_app_menu_while_the_server_starts_stops_it_before_the_process_ends() {
+    let ui = ui(1000, 760);
+    let server = MockServer::start();
+    let host =
+        Arc::new(FakeHost::ok(host_info(&server)).with_start_delay(Duration::from_millis(600)));
+    ui.app.online().set_host(host.clone());
+    ui.open_menu();
+    ui.fill("Pseudo", "Alice");
+    ui.button("Héberger une partie");
+    ui.online().invoke_quit_requested();
+    assert!(!ui.app.window().window().is_visible());
+    assert!(
+        ui.app
+            .online()
+            .wait_for_pending_stops(Duration::from_secs(8))
+    );
+    assert!(!host.is_running());
+}
+
 #[test]
 fn the_exit_wait_outlasts_the_servers_own_five_second_grace() {
     // The server may spend its whole 5 s grace saying goodbye; the tunnel is killed after that.

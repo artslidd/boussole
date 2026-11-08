@@ -367,6 +367,33 @@ impl OnlineUi {
         true
     }
 
+    /// Route the application menu's Quit (⌘Q, Dock → Quit) through the same path as closing the
+    /// window: see [`crate::macos_quit`]. Call it once, from the real application (not from
+    /// tests: it changes AppKit for the whole process). A no-op outside macOS.
+    pub fn install_quit_hook(&self) -> Result<(), String> {
+        let weak = self.inner.window.clone();
+        crate::macos_quit::intercept_terminate(move || {
+            // Called on the main thread inside AppKit's event handling: hand the request over to
+            // the Slint event loop and return at once.
+            let queued = weak
+                .upgrade_in_event_loop(|window| window.global::<Online>().invoke_quit_requested());
+            if queued.is_err() {
+                crate::macos_quit::terminate_now(); // nowhere to send it: quit like AppKit would
+            }
+        })
+    }
+
+    /// The application menu's Quit (⌘Q): the same path as closing the window: the host is asked
+    /// first, then the room is left, the server and tunnel are stopped, and the window closes (the
+    /// process exits when `App::run` has seen the stops through).
+    fn quit_requested(&self) {
+        if self.request_close()
+            && let Some(window) = self.inner.window.upgrade()
+        {
+            let _ = window.hide();
+        }
+    }
+
     fn now(&self) -> Instant {
         (self.inner.clock.borrow())()
     }
@@ -429,6 +456,7 @@ impl OnlineUi {
             ui.teardown();
             ui.sync();
         });
+        on!(on_quit_requested, |ui| ui.quit_requested());
         on!(on_pump, |ui| ui.pump());
 
         {
