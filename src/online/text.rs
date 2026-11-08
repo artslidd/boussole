@@ -1,0 +1,28 @@
+//! French texts of the online mode that do not depend on the screen layout.
+
+use boussole_protocol::ErrorCode;
+
+pub const SESSION_EXPIRED: &str =
+    "La partie n’est plus disponible : vous avez été retiré de la salle.";
+pub const ROOM_CLOSED: &str = "La salle a été fermée.";
+pub const SERVER_UNREACHABLE: &str =
+    "Serveur injoignable : vérifiez l’adresse, l’hôte et votre connexion.";
+pub const CONNECTION_LOST: &str = "Connexion perdue : impossible de rejoindre le serveur.";
+
+/// What the player reads for a server error. Starts from the protocol's own French text and
+/// rewords the few that need a client-side hint.
+pub fn error_fr(code: ErrorCode) -> String {
+    match code {
+        ErrorCode::BadVersion => "Version incompatible — mettez le jeu à jour.".to_owned(),
+        ErrorCode::DatasetMismatch => {
+            "Liste des villes incompatible — mettez le jeu à jour (ou celui de l’hôte).".to_owned()
+        }
+        ErrorCode::RoomNotFound => {
+            "Salle introuvable : vérifiez le code (5 caractères) et l’adresse.".to_owned()
+        }
+        ErrorCode::RateLimited => {
+            "Trop d’actions en peu de temps : patientez un instant.".to_owned()
+        }
+        other => other.message_fr().to_owned(),
+    }
+}

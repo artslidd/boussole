@@ -12,6 +12,7 @@ boussole-core = { path = "crates/boussole-core" }
 boussole-protocol = { path = "crates/boussole-protocol" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tokio = "1"
 
 # The root package is the Slint desktop client (`cargo run --release` launches the game).
 [package]
@@ -25,8 +26,17 @@ description = "Boussole: guess the hidden French city from compass arrows to oth
 # src/lib.rs; the dependencies below are for the Slint front end only.
 [dependencies]
 boussole-core.workspace = true
+boussole-protocol.workspace = true
 slint = "1.18"
 ttf-parser = "0.25"
+# Online mode: a background thread runs a tokio runtime with a WebSocket client (rustls with the
+# bundled web PKI roots, so `wss://` works without touching the operating system's certificates).
+tokio = { workspace = true, features = ["rt", "net", "time", "sync", "macros"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# `wss://` needs a rustls crypto provider; install `ring` explicitly (see net::client) instead of
+# relying on feature auto-detection, which panics when two providers end up in the build.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 
 [build-dependencies]
 slint-build = "1.18"
@@ -34,3 +44,4 @@ slint-build = "1.18"
 [dev-dependencies]
 i-slint-backend-testing = "1.18"
 png = "0.18.1"
+serde_json.workspace = true

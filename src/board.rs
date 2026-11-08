@@ -161,6 +161,15 @@ pub fn format_hint_label(hint: &Hint, difficulty: Difficulty) -> String {
     }
 }
 
+/// Text of an arrow label from what the server sent: the city name, plus ` · NNN km` iff the
+/// hint carries a distance (only Facile rooms do; a Difficile room never sends one).
+pub fn format_dto_label(city: &str, distance_km: Option<u32>) -> String {
+    match distance_km {
+        Some(km) => format!("{city} · {}", format_distance(f64::from(km))),
+        None => city.to_owned(),
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Shapes
 // ---------------------------------------------------------------------------------------------

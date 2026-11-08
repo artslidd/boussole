@@ -13,5 +13,7 @@ pub use boussole_core::{cities, game, geo, search};
 pub mod app;
 pub mod board;
 pub mod headless;
+pub mod net;
+pub mod online;
 pub mod session;
 pub mod text;
