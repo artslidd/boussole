@@ -135,9 +135,10 @@ impl std::error::Error for HostError {}
 ///   `TunnelError::NotInstalled` → [`HostError::TunnelNotInstalled`]; `StartFailed(_)` and
 ///   `Timeout` → [`HostError::TunnelFailed`]; the server is shut down again on any failure.
 /// * An `io::ErrorKind::AddrInUse` bind error → [`HostError::PortInUse`], any other → `Other`.
-/// * `stop`: `Tunnel::stop().await` first (cloudflared is killed), then
-///   `ServerHandle::shutdown().await`; clients then see WebSocket close code 1001, which the
-///   client treats as "the host closed the game". Dropping either handle also stops it.
+/// * `stop`: `ServerHandle::shutdown().await` first (its goodbye, WebSocket close code 1001, to
+///   every player still goes through the tunnel; the client treats it as "the host closed the
+///   game"), then `Tunnel::stop().await` (cloudflared is killed). Dropping either handle also
+///   stops it.
 ///
 /// The host's own client connects to `local_url` like any other player and counts as one of the
 /// 16 connections of the host-mode server.
@@ -181,6 +182,7 @@ pub struct FakeHost {
     started: Mutex<Vec<HostMode>>,
     stops: AtomicUsize,
     health: Mutex<HostHealth>,
+    stop_delay: Mutex<std::time::Duration>,
 }
 
 impl FakeHost {
@@ -192,6 +194,7 @@ impl FakeHost {
             started: Mutex::new(Vec::new()),
             stops: AtomicUsize::new(0),
             health: Mutex::new(HostHealth::Running),
+            stop_delay: Mutex::new(std::time::Duration::ZERO),
         }
     }
 
@@ -203,6 +206,7 @@ impl FakeHost {
             started: Mutex::new(Vec::new()),
             stops: AtomicUsize::new(0),
             health: Mutex::new(HostHealth::Running),
+            stop_delay: Mutex::new(std::time::Duration::ZERO),
         }
     }
 
@@ -228,6 +232,13 @@ impl FakeHost {
         self.stops.load(Ordering::SeqCst)
     }
 
+    /// Make `stop` take this long (a server saying goodbye to its clients, a tunnel being
+    /// killed): the UI must never wait for it.
+    pub fn with_stop_delay(self, delay: std::time::Duration) -> Self {
+        *self.stop_delay.lock().unwrap() = delay;
+        self
+    }
+
     /// What [`Host::health`] answers from now on (a crashed server, a dead tunnel).
     pub fn set_health(&self, health: HostHealth) {
         *self.health.lock().unwrap() = health;
@@ -244,6 +255,8 @@ impl Host for FakeHost {
     }
 
     fn stop(&self) {
+        let delay = *self.stop_delay.lock().unwrap();
+        std::thread::sleep(delay);
         self.stops.fetch_add(1, Ordering::SeqCst);
     }
 

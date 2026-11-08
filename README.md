@@ -91,10 +91,6 @@ players take turns, six tries for the whole team, everyone sees every guess and 
 The hidden city never reaches a client before the round ends: the server decides, the client
 only draws (see [`docs/protocol.md`](docs/protocol.md)).
 
-> **Status of this branch:** *Héberger une partie* runs against the `Host` trait. Until the
-> embedded server of the server crate is wired in, the app's own host answers that hosting is not
-> available; *Rejoindre* and *Créer une salle* work against any Boussole server.
-
 From the start screen choose **Jouer en ligne**, type a **Pseudo** (1 to 16 characters), then:
 
 | You want to… | Do this |
@@ -140,13 +136,14 @@ From the start screen choose **Jouer en ligne**, type a **Pseudo** (1 to 16 char
 
 Everything fits the minimum window (800 × 600) with 8 players, see
 [`docs/screenshots/online/`](docs/screenshots/online) (`17`–`19`). Running a server of your own
-(Docker, always-on) is the server side's job: see `docs/deploy.md` once it lands.
+(Docker, always-on) is the server side's job: see [`docs/deploy.md`](docs/deploy.md).
 
 **How it is built.** `src/net` is a background thread with a tokio runtime and a `tokio-tungstenite`
 client (rustls with bundled roots, so `wss://` works) that says `hello`, keeps the socket alive
 with `ping` and reconnects with the resume token; `src/online` is a pure reducer
 (`apply(state, ServerMsg, now)`) plus the view-model each screen shows; `src/host.rs` is the
-`Host` trait behind *Héberger* (starts and stops the embedded server and its tunnel);
+`Host` trait behind *Héberger* (starts, stops and health-checks the embedded server and its
+tunnel) and `src/embedded_host.rs` its real implementation on top of `boussole-server`;
 `src/online_ui.rs` is the glue with `ui/online*.slint`. The network thread never touches the UI:
 events go through an inbox that the UI thread drains.
 
@@ -192,12 +189,14 @@ every message with a JSON example, state diagrams, timers, scoring, error codes,
     `text` (label measurement with the embedded font), `online` (the online reducer, its
     French texts and the view-model of each online screen), `net` (address normalisation and the
     WebSocket client), `host` (the `Host` trait behind *Héberger une partie*, with a fake for
-    tests), `clipboard`;
+    tests), `embedded_host` (the real one: the server embedded in the app, plus the tunnel), `clipboard`;
   - **Slint glue:** `app` (a `Session` behind the window), `online_ui` (the online mode's
     controller: state, connection, hosting, clipboard) and `headless` (a window without a screen,
     for screenshots and UI tests).
 - `src/main.rs` — the game; `examples/` — `screenshots`, `real_window` (smoke test of the real
-  winit window), `sample_round` (prints a round to the terminal, `cargo run --example
+  winit window), `real_window_online` (the same for the online mode: hosts on loopback with the real
+  server, a second client joins, a round starts, the host quits), `online_screenshots`,
+  `sample_round` (prints a round to the terminal, `cargo run --example
   sample_round -- 42 --reveal`).
 - `ui/*.slint` — the interface: `theme` (palette, fonts), `types`, `widgets` (buttons, level
   picker, dial, compass rose), `board`, `guess` (input, suggestions, history), `app`; the online
@@ -208,7 +207,10 @@ every message with a JSON example, state diagrams, timers, scoring, error codes,
   (whole rounds played through the real UI); online: `online_reducer` and `online_view` (every
   `ServerMsg`, Course and Coopération sequences, what each screen shows), `net` (the client
   against a scripted WebSocket server in `tests/common`: handshake errors, reconnect with the
-  token, giving up) and `online_flow` (the online screens driven by keys and clicks).
+  token, giving up, the server going away), `online_flow` (the online screens driven by keys and
+  clicks), `embedded_host` (the real embedded server: a two-client match, the port released,
+  the tunnel path with an injected starter, never a real tunnel) and `online_hosting` (the whole
+  "Héberger une partie" journey through the UI and the real server).
 
 ## Tests and quality gate
 
@@ -228,6 +230,7 @@ BLESS=1 cargo test -p boussole-protocol --test golden
 cargo run --release --example screenshots          # regenerate docs/screenshots/
 cargo run --release --example online_screenshots   # regenerate docs/screenshots/online/
 cargo run --release --example real_window -- /tmp/real  # opens the real window for ~2 s
+cargo run --release --example real_window_online -- /tmp/real-online  # hosts + joins on loopback, ~8 s
 ```
 
 The engine tests are deterministic (injected clock and randomness): they cover the handshake,

@@ -159,9 +159,14 @@ struct Inner {
     board: RefCell<crate::app::BoardInput>,
     board_version: Cell<i32>,
     poll: slint::Timer,
+    /// Embedded-server shutdowns in flight (worker threads).
+    stops: RefCell<Vec<std::thread::JoinHandle<()>>>,
+    /// Connections that were closed and are still saying goodbye.
+    closing: RefCell<Vec<NetHandle>>,
 }
 
-/// The online mode of one window.
+/// The online mode of one window. Cloning is cheap: clones share the same state.
+#[derive(Clone)]
 pub struct OnlineUi {
     inner: Rc<Inner>,
 }
@@ -211,6 +216,8 @@ impl OnlineUi {
             board: RefCell::new(crate::app::BoardInput::default()),
             board_version: Cell::new(0),
             poll: slint::Timer::default(),
+            stops: RefCell::new(Vec::new()),
+            closing: RefCell::new(Vec::new()),
         });
         let ui = Self { inner };
         ui.wire(window);
@@ -338,7 +345,7 @@ impl OnlineUi {
             self.sync();
             return false;
         }
-        self.teardown(true);
+        self.teardown();
         true
     }
 
@@ -401,7 +408,7 @@ impl OnlineUi {
         on!(on_show_ranking, |ui| ui.show_ranking());
         on!(on_back_to_lobby, |ui| ui.back_to_lobby());
         on!(on_back_to_menu, |ui| {
-            ui.teardown(false);
+            ui.teardown();
             ui.sync();
         });
         on!(on_pump, |ui| ui.pump());
@@ -466,7 +473,7 @@ impl OnlineUi {
         let Some(window) = self.inner.window.upgrade() else {
             return;
         };
-        self.teardown(false);
+        self.teardown();
         window.global::<Online>().set_active(false);
         self.inner.poll.stop();
         self.sync();
@@ -795,7 +802,7 @@ impl OnlineUi {
 
     /// Show `text` on the menu and tear everything down (connection, embedded server).
     fn fail_to_menu(&self, text: String, help: Option<MenuHelp>) {
-        self.teardown(false);
+        self.teardown();
         let mut core = self.inner.core.borrow_mut();
         core.error = text;
         core.help = help.unwrap_or(MenuHelp::None);
@@ -823,7 +830,7 @@ impl OnlineUi {
             self.inner.core.borrow_mut().confirm_leave = true;
             self.sync();
         } else {
-            self.teardown(false);
+            self.teardown();
             self.sync();
         }
     }
@@ -834,7 +841,7 @@ impl OnlineUi {
             core.confirm_leave = false;
             std::mem::take(&mut core.close_after_leave)
         };
-        self.teardown(close_window);
+        self.teardown();
         self.sync();
         if close_window && let Some(window) = self.inner.window.upgrade() {
             let _ = window.hide();
@@ -850,10 +857,10 @@ impl OnlineUi {
         self.sync();
     }
 
-    /// Leave the room, close the connection, stop the embedded server, back to the menu.
-    /// `blocking`: wait for the server to stop (the window is closing); otherwise it stops in
-    /// the background.
-    fn teardown(&self, blocking: bool) {
+    /// Leave the room, close the connection, stop the embedded server, back to the menu. Nothing
+    /// here waits: the connection says goodbye and the server stops on their own threads, which
+    /// [`OnlineUi::wait_for_pending_stops`] lets finish before the process exits.
+    fn teardown(&self) {
         let (net, host_started) = {
             let mut core = self.inner.core.borrow_mut();
             let in_room = core.state.room.is_some();
@@ -882,19 +889,46 @@ impl OnlineUi {
         };
         if let Some(net) = net {
             net.close(); // sends what is queued (leave_room) first, then closes
+            let mut closing = self.inner.closing.borrow_mut();
+            closing.retain(|n| !n.is_finished());
+            closing.push(net); // kept until its thread has said goodbye
         }
         if host_started {
-            if blocking {
-                self.inner.host.borrow().stop();
-            } else {
-                self.stop_host_in_background();
-            }
+            self.stop_host_in_background();
         }
     }
 
+    /// Stop the embedded server (and tunnel) on a worker thread: it can take seconds (goodbyes
+    /// to every player, killing cloudflared) and must never hold the UI thread.
     fn stop_host_in_background(&self) {
         let host = self.inner.host.borrow().clone();
-        std::thread::spawn(move || host.stop());
+        let handle = std::thread::spawn(move || host.stop());
+        let mut stops = self.inner.stops.borrow_mut();
+        stops.retain(|h| !h.is_finished());
+        stops.push(handle);
+    }
+
+    /// Wait (at most `timeout`) until every connection has said goodbye and every embedded
+    /// server has stopped. `true` if all are done. `App::run` calls it once the window is gone,
+    /// so closing the window is instant yet the host's goodbyes still go out.
+    pub fn wait_for_pending_stops(&self, timeout: Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let done = {
+                let mut stops = self.inner.stops.borrow_mut();
+                stops.retain(|h| !h.is_finished());
+                let mut closing = self.inner.closing.borrow_mut();
+                closing.retain(|n| !n.is_finished());
+                stops.is_empty() && closing.is_empty()
+            };
+            if done {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     // --- lobby ------------------------------------------------------------------------------------

@@ -11,6 +11,7 @@ pub const HOST_CLOSED: &str = "L’hôte a fermé la partie.";
 pub const OWN_SERVER_STOPPED: &str = "Le serveur de la partie s’est arrêté.";
 pub const SERVER_FULL: &str =
     "Salle pleine : le serveur n’accepte plus de connexions pour le moment.";
+pub const TOO_MANY_CONNECTIONS: &str = "Trop de connexions depuis cette adresse : fermez les autres fenêtres du jeu ou réessayez dans un instant.";
 pub const CANNOT_CREATE_ROOM: &str =
     "Le serveur ne peut pas créer de salle pour le moment (limite atteinte) : réessayez plus tard.";
 pub const CONNECTION_LOST: &str = "Connexion perdue : impossible de rejoindre le serveur.";

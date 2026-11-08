@@ -128,6 +128,11 @@ impl NetHandle {
         let _ = self.commands.send(Command::Close);
     }
 
+    /// Has the network thread ended (after [`NetHandle::close`], or a terminal failure)?
+    pub fn is_finished(&self) -> bool {
+        self.thread.as_ref().is_none_or(JoinHandle::is_finished)
+    }
+
     /// [`NetHandle::close`], then wait for the thread to end (tests, clean shutdown).
     pub fn close_and_wait(mut self) {
         self.close();
@@ -292,6 +297,12 @@ async fn open(
             // Over the connection cap: the server answers before the WebSocket upgrade.
             tokio_tungstenite::tungstenite::Error::Http(response) if response.status() == 503 => {
                 OpenError::from(NetError::ServerFull)
+            }
+            // Too many connections from this address: on a first connection that is the answer;
+            // while reconnecting it is expected for a moment (the server may still count our
+            // dead socket) and is retried.
+            tokio_tungstenite::tungstenite::Error::Http(response) if response.status() == 429 => {
+                OpenError::from(NetError::TooManyConnections)
             }
             tokio_tungstenite::tungstenite::Error::Io(io)
                 if io.kind() == std::io::ErrorKind::ConnectionRefused =>

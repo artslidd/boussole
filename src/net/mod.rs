@@ -27,6 +27,8 @@ pub enum NetError {
     ServerClosed,
     /// The server answered the WebSocket upgrade with HTTP 503: it is over its connection cap.
     ServerFull,
+    /// The server answered the upgrade with HTTP 429: too many connections from this address.
+    TooManyConnections,
 }
 
 impl fmt::Display for NetError {
@@ -39,6 +41,7 @@ impl fmt::Display for NetError {
             Self::ConnectionLost => f.write_str(text::CONNECTION_LOST),
             Self::ServerClosed => f.write_str(text::HOST_CLOSED),
             Self::ServerFull => f.write_str(text::SERVER_FULL),
+            Self::TooManyConnections => f.write_str(text::TOO_MANY_CONNECTIONS),
         }
     }
 }

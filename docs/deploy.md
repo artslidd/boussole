@@ -6,8 +6,8 @@ run it, from "no setup at all" to "always on":
 
 | | Who | Needs | Players connect to |
 |---|---|---|---|
-| [0. From a player's computer](#0-free-play-from-a-players-computer-recommended) | one player hosts, friends anywhere | `cargo` + free `cloudflared` (a button in the game is planned) | `wss://<random-words>.trycloudflare.com/ws` |
-| [1. LAN](#1-lan-play) | people on the same network | `cargo` (or the game, once hosting lands) | `ws://<host-ip>:7878/ws` |
+| [0. From a player's computer](#0-free-play-from-a-players-computer-recommended) | one player hosts, friends anywhere | the game (button *Héberger une partie*) or `cargo`; the tunnel needs free `cloudflared` | `wss://<random-words>.trycloudflare.com/ws` |
+| [1. LAN](#1-lan-play) | people on the same network | the game (*Héberger une partie*) or `cargo` | `ws://<host-ip>:7878/ws` |
 | [2. One container](#2-docker--podman-single-container) | a machine that already runs containers | Docker or Podman | `ws://<host-ip>:7878/ws` |
 | [3. Always-on server](#3-optional-always-on-remote-host) | a small VPS | Docker/Podman + a domain name | `wss://<your-domain>/ws` |
 
@@ -19,13 +19,28 @@ is French; this guide is for whoever runs the server.
 One player runs the server on their own computer and shares an address; nobody pays for a
 server and nobody needs an account.
 
-### From the game (planned, ticket 05: not in the game yet)
+### From the game
 
-The plan is a **Héberger une partie** button in the game's online menu that starts this same
-server *inside the app* (`boussole_server::start`) and shows the addresses to share: the LAN
-address and, if you ask for it, the public tunnel address below. Friends would then choose
-**Rejoindre** and enter the address and the room code. Until that lands, use the command line
-below; the server and the tunnel are the same.
+The online menu's **Héberger une partie** button starts this same server *inside the app*
+(`boussole_server::start`, on a small runtime of its own) and shows the addresses to share in
+the lobby, each with a **Copier** button:
+
+* **Réseau local**: the server listens on `0.0.0.0:7878` (any free port if 7878 is taken) and
+  the lobby lists `ws://<ip>:<port>/ws` for every network interface. The first time, macOS asks
+  whether the app may accept incoming connections: allow it.
+* **Internet**: the server listens on `127.0.0.1:<free port>` and a free Cloudflare quick tunnel
+  is opened in front of it; the lobby shows the `wss://<random-words>.trycloudflare.com/ws`
+  address and says "partagez l'adresse dans quelques secondes", because `cloudflared` prints the
+  address before it answers. It needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
+  (`brew install cloudflared`); without it the game explains how to install it and offers the
+  local network instead.
+
+Friends choose **Rejoindre** and enter the address and the room code (they may paste the
+`https://….trycloudflare.com` address a browser shows: the game turns it into `wss://…/ws`). If
+the tunnel dies, the host's header says *Tunnel perdu* and the game goes on for the players
+already connected; if the server stops, everybody is sent back to the menu. Quitting as host asks
+first, because it ends the game for everybody: the server says goodbye to every player (close
+code 1001), then the tunnel is stopped and the port released.
 
 ### From the command line
 
@@ -308,9 +323,10 @@ Malformed values stop the server at startup with a message (exit code 2). Flags:
 `--healthcheck` (exit 0 if `/healthz` answers 200 on the configured port; used by the
 container), `--help`.
 
-When the server is embedded in an app (the planned *Héberger une partie*), it uses small limits
-instead (16 connections, 4 rooms, 4 connections per client address), chosen by
-`ServerConfig::for_host_mode`.
+When the server is embedded in an app (*Héberger une partie*), it uses small limits instead
+(16 connections, 4 rooms), chosen by `ServerConfig::for_host_mode`; the game raises the
+per-address limit to 8 because the host's own client and a few friends (or windows) on one
+machine share an address.
 
 ### Endpoints
 

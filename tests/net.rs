@@ -468,6 +468,33 @@ fn a_tunnel_whose_host_is_gone_is_given_up_on_like_a_refused_port() {
 }
 
 #[test]
+fn a_visitor_over_the_per_address_cap_is_told_so_and_it_is_retried_while_reconnecting() {
+    // HTTP 429 before the upgrade: too many connections from this address. On a first connection
+    // that is the answer; while reconnecting it is expected for a moment (the server may still
+    // count our dead socket), so keep trying.
+    let server = MockServer::start();
+    server.answer_with_http_status(Some(429));
+    let first = connect(fast(&server.url));
+    assert_eq!(first.next(), NetEvent::Failed(NetError::TooManyConnections));
+    let message = NetError::TooManyConnections.to_string();
+    assert!(message.starts_with("Trop de connexions"), "{message}");
+
+    server.answer_with_http_status(None);
+    let client = connect(fast(&server.url));
+    welcome_of(client.next());
+    server.answer_with_http_status(Some(429));
+    server.drop_connection();
+    assert!(matches!(
+        client.next(),
+        NetEvent::Reconnecting { attempt: 1 }
+    ));
+    std::thread::sleep(Duration::from_millis(150));
+    server.answer_with_http_status(None);
+    let (_, _, resumed) = welcome_of(client.next_skipping_reconnecting());
+    assert!(resumed);
+}
+
+#[test]
 fn a_gateway_hiccup_is_retried_because_the_game_may_well_still_be_there() {
     // 502 / 504 can be a proxy restarting for a moment: keep trying, the slot is held.
     let server = MockServer::start();

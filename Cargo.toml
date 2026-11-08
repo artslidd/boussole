@@ -27,12 +27,15 @@ description = "Boussole: guess the hidden French city from compass arrows to oth
 [dependencies]
 boussole-core.workspace = true
 boussole-protocol.workspace = true
+# The server embedded in the app ("Héberger une partie"). `default-features = false` leaves the
+# standalone binary's log output (`tracing-subscriber`) out of the client.
+boussole-server = { path = "crates/boussole-server", default-features = false }
 slint = "1.18"
 ttf-parser = "0.25"
 # Online mode: a background thread runs a tokio runtime with a WebSocket client (rustls with the
 # bundled web PKI roots, so `wss://` works without touching the operating system's certificates).
-tokio = { workspace = true, features = ["rt", "net", "time", "sync", "macros"] }
-tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "net", "time", "sync", "macros"] }
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 # Copy buttons of the lobby (room code, address to share). Slint has no clipboard API for apps.
 arboard = { version = "3", default-features = false }

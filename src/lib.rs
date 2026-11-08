@@ -13,6 +13,7 @@ pub use boussole_core::{cities, game, geo, search};
 pub mod app;
 pub mod board;
 pub mod clipboard;
+pub mod embedded_host;
 pub mod headless;
 pub mod host;
 pub mod net;

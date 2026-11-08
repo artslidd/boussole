@@ -902,7 +902,58 @@ fn closing_the_window_as_host_asks_first_and_then_shuts_everything_down() {
     assert!(ui.online().get_confirm_leave_open());
     ui.button("Fermer la partie");
     assert_eq!(ui.next_msg(&server), ClientMsg::LeaveRoom);
-    assert_eq!(host.stops(), 1, "stopped before the window goes (blocking)");
+    // the server stops in the background; the process waits for it before it exits
+    assert!(
+        ui.app
+            .online()
+            .wait_for_pending_stops(Duration::from_secs(5))
+    );
+    assert_eq!(host.stops(), 1);
+}
+
+#[test]
+fn a_slow_server_shutdown_never_blocks_the_window() {
+    // Stopping the server (goodbyes to every client, killing cloudflared) can take seconds.
+    let ui = ui(1000, 760);
+    let server = MockServer::start();
+    let host =
+        Arc::new(FakeHost::ok(host_info(&server)).with_stop_delay(Duration::from_millis(1_500)));
+    ui.app.online().set_host(host.clone());
+    ui.open_menu();
+    ui.fill("Pseudo", "Alice");
+    ui.button("Héberger une partie");
+    let _ = ui.next_msg(&server);
+    server.send(lobby_msg(
+        course_config(),
+        vec![player(1, "Alice", true, true)],
+    ));
+    ui.wait("the lobby", |ui| ui.screen() == OnlineScreen::Lobby);
+
+    ui.button("Quitter");
+    let before = Instant::now();
+    ui.button("Fermer la partie");
+    assert!(
+        before.elapsed() < Duration::from_millis(800),
+        "leaving took {:?}: the UI thread waited for the server to stop",
+        before.elapsed()
+    );
+    assert_eq!(ui.screen(), OnlineScreen::Menu, "back on the menu at once");
+    assert_eq!(
+        host.stops(),
+        0,
+        "…while the server is still shutting down in the background"
+    );
+    assert!(
+        !ui.app
+            .online()
+            .wait_for_pending_stops(Duration::from_millis(50))
+    );
+    assert!(
+        ui.app
+            .online()
+            .wait_for_pending_stops(Duration::from_secs(5))
+    );
+    assert_eq!(host.stops(), 1);
 }
 
 #[test]

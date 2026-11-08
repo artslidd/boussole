@@ -4,6 +4,8 @@
 //! of the session uses seed `N + k`), which is handy for demos and manual checks.
 
 use boussole::app::App;
+use boussole::embedded_host::EmbeddedHost;
+use std::sync::Arc;
 
 fn main() -> Result<(), slint::PlatformError> {
     let app = match seed_from_args(std::env::args().skip(1)) {
@@ -14,6 +16,9 @@ fn main() -> Result<(), slint::PlatformError> {
             App::with_time_seeds()?
         }
     };
+    // "Héberger une partie" runs the Boussole server inside this process (and, on request, a
+    // free Cloudflare tunnel). Nothing starts until the player asks for it.
+    app.online().set_host(Arc::new(EmbeddedHost::new()));
     app.run()
 }
 
