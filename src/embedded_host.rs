@@ -14,6 +14,8 @@ use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
+use tokio::sync::watch;
 
 /// The port a local-network game tries first, so friends can type a short address.
 pub const PREFERRED_LAN_PORT: u16 = 7878;
@@ -21,6 +23,10 @@ pub const PREFERRED_LAN_PORT: u16 = 7878;
 /// Connections per visitor address: the host's own client and a few friends (or windows) on the
 /// same machine count against it. The whole server takes 16.
 const MAX_CONNECTIONS_PER_IP: usize = 8;
+
+/// Longest the server is given to say goodbye before the tunnel is killed regardless (the server
+/// itself gives up after 5 s). The app waits longer than this at exit, see `online_ui::EXIT_WAIT`.
+const SERVER_SHUTDOWN_BOUND: Duration = Duration::from_secs(6);
 
 type TunnelFuture = Pin<Box<dyn Future<Output = Result<Tunnel, TunnelError>> + Send>>;
 type TunnelStarter = Arc<dyn Fn(u16) -> TunnelFuture + Send + Sync>;
@@ -38,6 +44,11 @@ pub struct EmbeddedHost {
     tunnel_starter: TunnelStarter,
     runtime: OnceLock<tokio::runtime::Runtime>,
     running: Mutex<Option<Running>>,
+    /// Held for the whole of a `start` or `stop`: they never interleave, so a slow start can
+    /// never overwrite (and thereby kill) a server started after it, nor be stopped by it.
+    lifecycle: Mutex<()>,
+    /// Bumped by [`Host::cancel_start`]; a start in flight watches it.
+    cancel: watch::Sender<u64>,
 }
 
 impl EmbeddedHost {
@@ -55,6 +66,8 @@ impl EmbeddedHost {
             tunnel_starter: Arc::new(|port| Box::pin(tunnel::start_cloudflared(port))),
             runtime: OnceLock::new(),
             running: Mutex::new(None),
+            lifecycle: Mutex::new(()),
+            cancel: watch::channel(0).0,
         }
     }
 
@@ -86,7 +99,11 @@ impl EmbeddedHost {
         Ok(self.runtime.get_or_init(|| runtime))
     }
 
-    async fn launch(&self, mode: HostMode) -> Result<(Running, HostInfo), HostError> {
+    async fn launch(
+        &self,
+        mode: HostMode,
+        cancel: &mut watch::Receiver<u64>,
+    ) -> Result<(Running, HostInfo), HostError> {
         match mode {
             HostMode::Lan => {
                 let server = self.start_lan().await?;
@@ -111,7 +128,18 @@ impl EmbeddedHost {
                     .await
                     .map_err(map_io)?;
                 let port = server.local_addr().port();
-                match (self.tunnel_starter)(port).await {
+                // Opening the tunnel can take 20 s: it is the step that can be abandoned. Dropping
+                // the starter's future kills the `cloudflared` child it spawned.
+                let tunnel = tokio::select! {
+                    biased;
+                    _ = cancel.changed() => None,
+                    result = (self.tunnel_starter)(port) => Some(result),
+                };
+                let Some(tunnel) = tunnel else {
+                    server.shutdown().await;
+                    return Err(HostError::Cancelled);
+                };
+                match tunnel {
                     Ok(tunnel) => {
                         let info = HostInfo {
                             port,
@@ -167,16 +195,9 @@ impl Drop for EmbeddedHost {
     }
 }
 
-impl Host for EmbeddedHost {
-    fn start(&self, mode: HostMode) -> Result<HostInfo, HostError> {
-        self.stop(); // a second start replaces the first
-        let runtime = self.runtime()?;
-        let (running, info) = runtime.block_on(self.launch(mode))?;
-        *self.running.lock().unwrap() = Some(running);
-        Ok(info)
-    }
-
-    fn stop(&self) {
+impl EmbeddedHost {
+    /// Stop what runs. The caller holds the lifecycle lock.
+    fn stop_locked(&self) {
         let Some(Running { server, tunnel }) = self.running.lock().unwrap().take() else {
             return;
         };
@@ -185,12 +206,35 @@ impl Host for EmbeddedHost {
         };
         runtime.block_on(async move {
             // The server first: its goodbye (close 1001) to every player still goes through the
-            // tunnel. Then the tunnel (cloudflared is killed).
-            server.shutdown().await;
+            // tunnel. Bounded, so that the tunnel is killed even if the server is slow.
+            let _ = tokio::time::timeout(SERVER_SHUTDOWN_BOUND, server.shutdown()).await;
             if let Some(tunnel) = tunnel {
                 tunnel.stop().await;
             }
         });
+    }
+}
+
+impl Host for EmbeddedHost {
+    fn start(&self, mode: HostMode) -> Result<HostInfo, HostError> {
+        let _lifecycle = self.lifecycle.lock().unwrap_or_else(|e| e.into_inner());
+        // Watch for a cancellation from now on (one that came earlier belongs to a start that is
+        // over).
+        let mut cancel = self.cancel.subscribe();
+        self.stop_locked(); // a second start replaces the first
+        let runtime = self.runtime()?;
+        let (running, info) = runtime.block_on(self.launch(mode, &mut cancel))?;
+        *self.running.lock().unwrap() = Some(running);
+        Ok(info)
+    }
+
+    fn stop(&self) {
+        let _lifecycle = self.lifecycle.lock().unwrap_or_else(|e| e.into_inner());
+        self.stop_locked();
+    }
+
+    fn cancel_start(&self) {
+        self.cancel.send_modify(|generation| *generation += 1);
     }
 
     fn health(&self) -> HostHealth {

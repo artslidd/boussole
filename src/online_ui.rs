@@ -20,6 +20,7 @@ use crate::clipboard::{Clipboard, SystemClipboard};
 use crate::host::{
     Host, HostError, HostHealth, HostInfo, HostMode, ShareAddress, ShareKind, UnavailableHost,
 };
+use crate::host_worker::{HostEvent, HostWorker};
 use crate::net::{AddressError, NetConfig, NetEvent, NetHandle, normalize_address};
 use crate::online::state::{Link, OnlineState, apply, set_link};
 use crate::online::view::{
@@ -35,6 +36,7 @@ use slint::{ComponentHandle, ModelRc, VecModel};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -49,6 +51,10 @@ const HEALTH_EVERY: Duration = Duration::from_secs(1);
 /// How long a fresh tunnel address is said to need before it answers (cloudflared prints the
 /// address before it is reachable).
 const TUNNEL_WARM_UP: Duration = Duration::from_secs(10);
+/// How long the process waits at exit for the embedded server to stop (it may spend its whole
+/// 5 s grace saying goodbye) and for the tunnel to be killed after it, and for connections to say
+/// their goodbye. Bounded: closing the window never hangs.
+pub const EXIT_WAIT: Duration = Duration::from_secs(8);
 /// A guess the server has not answered after this long is given up on (the field reopens).
 const GUESS_TIMEOUT: Duration = Duration::from_secs(8);
 
@@ -78,6 +84,10 @@ enum Inbound {
     Net {
         session: u64,
         event: NetEvent,
+    },
+    /// The host worker picked this start up (it was queued behind an earlier attempt).
+    HostBegan {
+        session: u64,
     },
     Host {
         session: u64,
@@ -112,9 +122,14 @@ struct Core {
     net: Option<NetHandle>,
     /// Bumped for every connection attempt and every teardown: stale inbox entries are dropped.
     session: u64,
+    /// The same number, shared with the host worker so that a queued start of an older session is
+    /// dropped instead of run.
+    live_session: Arc<AtomicU64>,
     /// The embedded server, while it runs.
     hosted: Option<HostInfo>,
-    host_started: bool,
+    /// A host start was queued and its stop has not been: the host (server, tunnel) is, or will
+    /// be, ours to stop.
+    host_engaged: bool,
     /// The server address typed for a remote room (shown as the address to share).
     remote_url: Option<String>,
     /// The host chose the Internet tunnel (so its address needs a moment to answer).
@@ -159,8 +174,9 @@ struct Inner {
     board: RefCell<crate::app::BoardInput>,
     board_version: Cell<i32>,
     poll: slint::Timer,
-    /// Embedded-server shutdowns in flight (worker threads).
-    stops: RefCell<Vec<std::thread::JoinHandle<()>>>,
+    /// The queue in front of the host: every start and stop, one after the other. Created on first
+    /// use, dropped when the host is replaced.
+    worker: RefCell<Option<HostWorker>>,
     /// Connections that were closed and are still saying goodbye.
     closing: RefCell<Vec<NetHandle>>,
 }
@@ -190,7 +206,8 @@ impl OnlineUi {
                 net: None,
                 session: 0,
                 hosted: None,
-                host_started: false,
+                live_session: Arc::new(AtomicU64::new(0)),
+                host_engaged: false,
                 remote_url: None,
                 hosting_tunnel: false,
                 host_started_at: None,
@@ -216,7 +233,7 @@ impl OnlineUi {
             board: RefCell::new(crate::app::BoardInput::default()),
             board_version: Cell::new(0),
             poll: slint::Timer::default(),
-            stops: RefCell::new(Vec::new()),
+            worker: RefCell::new(None),
             closing: RefCell::new(Vec::new()),
         });
         let ui = Self { inner };
@@ -229,6 +246,7 @@ impl OnlineUi {
     /// Use another [`Host`] (the real embedded server, or a fake in tests).
     pub fn set_host(&self, host: Arc<dyn Host>) {
         *self.inner.host.borrow_mut() = host;
+        self.inner.worker.borrow_mut().take(); // the next call starts a worker on the new host
     }
 
     pub fn set_clipboard(&self, clipboard: Rc<dyn Clipboard>) {
@@ -278,11 +296,11 @@ impl OnlineUi {
         };
         {
             let mut core = self.inner.core.borrow_mut();
-            core.session += 1;
+            core.next_session();
             core.state = OnlineState::new();
             core.stage = Stage::Connecting;
             core.intent = Some(Intent::Host);
-            core.host_started = hosted.is_some();
+            core.host_engaged = hosted.is_some();
             core.hosted = hosted;
         }
         window.global::<Online>().set_active(true);
@@ -528,25 +546,25 @@ impl OnlineUi {
             core.stage = Stage::Starting;
             core.intent = Some(Intent::Host);
             core.hosting_tunnel = mode == HostMode::Tunnel;
-            core.busy_text = match mode {
-                HostMode::Lan => "Démarrage de la partie…".to_owned(),
-                HostMode::Tunnel => "Ouverture du tunnel gratuit… (quelques secondes)".to_owned(),
+            // An earlier attempt may still be closing (the player went back while it was starting):
+            // this start waits behind it, in the host worker's queue.
+            let behind_another = self
+                .inner
+                .worker
+                .borrow()
+                .as_ref()
+                .is_some_and(|w| w.pending() > 0);
+            core.busy_text = if behind_another {
+                "Fermeture de l’essai précédent…".to_owned()
+            } else {
+                starting_text(mode).to_owned()
             };
-            core.session += 1;
-            session = core.session;
+            core.host_engaged = true;
+            session = core.next_session();
         }
-        // Binding a port and waiting for the tunnel's address can take seconds: not on this thread.
-        let host = self.inner.host.borrow().clone();
-        let inbox = self.inner.inbox.clone();
-        let weak = self.inner.window.clone();
-        std::thread::spawn(move || {
-            let result = host.start(mode);
-            inbox
-                .lock()
-                .unwrap()
-                .push_back(Inbound::Host { session, result });
-            wake(&weak);
-        });
+        // Binding a port and waiting for the tunnel's address can take seconds: not on this
+        // thread, and strictly after whatever the host is still doing.
+        self.with_worker(|worker| worker.start(session, mode));
         self.sync();
     }
 
@@ -608,9 +626,8 @@ impl OnlineUi {
         (self.inner.net_tweak.borrow())(&mut config);
         let session = {
             let mut core = self.inner.core.borrow_mut();
-            core.session += 1;
             core.state = OnlineState::new();
-            core.session
+            core.next_session()
         };
         let inbox = self.inner.inbox.clone();
         let weak = self.inner.window.clone();
@@ -628,6 +645,7 @@ impl OnlineUi {
 
     fn handle_inbound(&self, inbound: Inbound) {
         match inbound {
+            Inbound::HostBegan { session } => self.on_host_began(session),
             Inbound::Host { session, result } => self.on_host_result(session, result),
             Inbound::Net { session, event } => {
                 if session == self.inner.core.borrow().session {
@@ -637,13 +655,24 @@ impl OnlineUi {
         }
     }
 
+    fn on_host_began(&self, session: u64) {
+        let mut core = self.inner.core.borrow_mut();
+        if session == core.session && core.stage == Stage::Starting {
+            core.busy_text = starting_text(if core.hosting_tunnel {
+                HostMode::Tunnel
+            } else {
+                HostMode::Lan
+            })
+            .to_owned();
+        }
+    }
+
     fn on_host_result(&self, session: u64, result: Result<HostInfo, HostError>) {
         let current = self.inner.core.borrow().session;
         if session != current {
-            // The player gave up while it was starting: shut what just came up back down.
-            if result.is_ok() {
-                self.stop_host_in_background();
-            }
+            // The player gave up while it was starting. Their `teardown` already queued a stop
+            // behind this start, which stops whatever it brought up: touching the host here
+            // could stop a newer game.
             return;
         }
         match result {
@@ -652,7 +681,7 @@ impl OnlineUi {
                 let nick = {
                     let mut core = self.inner.core.borrow_mut();
                     core.hosted = Some(info);
-                    core.host_started = true;
+                    core.host_engaged = true;
                     core.host_started_at = Some(self.now());
                     core.last_health = self.now();
                     core.tunnel_lost = false;
@@ -670,6 +699,8 @@ impl OnlineUi {
                 }
             }
             Err(error) => {
+                // A failed start cleaned up after itself: nothing for the teardown to stop.
+                self.inner.core.borrow_mut().host_engaged = false;
                 let help = if error == HostError::TunnelNotInstalled {
                     MenuHelp::TunnelMissing
                 } else {
@@ -861,14 +892,14 @@ impl OnlineUi {
     /// here waits: the connection says goodbye and the server stops on their own threads, which
     /// [`OnlineUi::wait_for_pending_stops`] lets finish before the process exits.
     fn teardown(&self) {
-        let (net, host_started) = {
+        let (net, engaged) = {
             let mut core = self.inner.core.borrow_mut();
             let in_room = core.state.room.is_some();
             let net = core.net.take();
             if in_room {
                 send_via(&mut core.sent, net.as_ref(), ClientMsg::LeaveRoom);
             }
-            core.session += 1; // late events of the old connection are dropped
+            core.next_session(); // late events of the old connection are dropped
             core.state.leave_room_locally();
             core.state = OnlineState::new();
             core.stage = Stage::Menu;
@@ -884,8 +915,8 @@ impl OnlineUi {
             core.pending_config = None;
             core.copied = None;
             core.confirm_leave = false;
-            let started = std::mem::take(&mut core.host_started);
-            (net, started)
+            let engaged = std::mem::take(&mut core.host_engaged);
+            (net, engaged)
         };
         if let Some(net) = net {
             net.close(); // sends what is queued (leave_room) first, then closes
@@ -893,33 +924,58 @@ impl OnlineUi {
             closing.retain(|n| !n.is_finished());
             closing.push(net); // kept until its thread has said goodbye
         }
-        if host_started {
-            self.stop_host_in_background();
+        if engaged {
+            // Abandon a start that is still running, then stop whatever is up, in that order and
+            // strictly after any call in flight (the host worker's queue).
+            self.with_worker(|worker| {
+                worker.cancel_start();
+                worker.stop();
+            });
         }
     }
 
-    /// Stop the embedded server (and tunnel) on a worker thread: it can take seconds (goodbyes
-    /// to every player, killing cloudflared) and must never hold the UI thread.
-    fn stop_host_in_background(&self) {
-        let host = self.inner.host.borrow().clone();
-        let handle = std::thread::spawn(move || host.stop());
-        let mut stops = self.inner.stops.borrow_mut();
-        stops.retain(|h| !h.is_finished());
-        stops.push(handle);
+    /// Run `f` on the host worker, starting it (on the current host) if need be.
+    fn with_worker<R>(&self, f: impl FnOnce(&HostWorker) -> R) -> R {
+        if self.inner.worker.borrow().is_none() {
+            let inbox = self.inner.inbox.clone();
+            let weak = self.inner.window.clone();
+            let live = self.inner.core.borrow().live_session.clone();
+            let host = self.inner.host.borrow().clone();
+            let worker = HostWorker::spawn(host, live, move |event| {
+                let inbound = match event {
+                    HostEvent::Began { session } => Inbound::HostBegan { session },
+                    HostEvent::Started { session, result } => Inbound::Host { session, result },
+                };
+                inbox.lock().unwrap().push_back(inbound);
+                wake(&weak);
+            });
+            *self.inner.worker.borrow_mut() = Some(worker);
+        }
+        f(self
+            .inner
+            .worker
+            .borrow()
+            .as_ref()
+            .expect("worker was just created"))
     }
 
-    /// Wait (at most `timeout`) until every connection has said goodbye and every embedded
-    /// server has stopped. `true` if all are done. `App::run` calls it once the window is gone,
-    /// so closing the window is instant yet the host's goodbyes still go out.
+    /// Wait (at most `timeout`) until every connection has said goodbye and the embedded server
+    /// has finished starting or stopping. `true` if all is done. `App::run` calls it with
+    /// [`EXIT_WAIT`] once the window is gone, so closing is instant yet the host's goodbyes go
+    /// out, an in-flight start is stopped, and the tunnel is killed before the process ends.
     pub fn wait_for_pending_stops(&self, timeout: Duration) -> bool {
         let deadline = std::time::Instant::now() + timeout;
         loop {
             let done = {
-                let mut stops = self.inner.stops.borrow_mut();
-                stops.retain(|h| !h.is_finished());
+                let host_idle = self
+                    .inner
+                    .worker
+                    .borrow()
+                    .as_ref()
+                    .is_none_or(|w| w.pending() == 0);
                 let mut closing = self.inner.closing.borrow_mut();
                 closing.retain(|n| !n.is_finished());
-                stops.is_empty() && closing.is_empty()
+                host_idle && closing.is_empty()
             };
             if done {
                 return true;
@@ -1165,6 +1221,22 @@ impl OnlineUi {
 }
 
 // --- helpers on Core ------------------------------------------------------------------------------
+
+impl Core {
+    /// A new session: late events and queued host starts of the old one are dropped.
+    fn next_session(&mut self) -> u64 {
+        self.session += 1;
+        self.live_session.store(self.session, Ordering::SeqCst);
+        self.session
+    }
+}
+
+fn starting_text(mode: HostMode) -> &'static str {
+    match mode {
+        HostMode::Lan => "Démarrage de la partie…",
+        HostMode::Tunnel => "Ouverture du tunnel gratuit… (quelques secondes)",
+    }
+}
 
 fn clear_menu_messages(core: &mut Core) {
     core.nickname_error.clear();

@@ -911,6 +911,142 @@ fn closing_the_window_as_host_asks_first_and_then_shuts_everything_down() {
     assert_eq!(host.stops(), 1);
 }
 
+/// Retour while the server is starting, then hosting again: the abandoned start must neither be
+/// connected to nor stopped *after* the new one came up (review S1).
+fn slow_start_then_back_then_host_again(cancellable: bool) {
+    let ui = ui(1000, 760);
+    let server = MockServer::start();
+    let mut fake = FakeHost::ok(host_info(&server)).with_start_delay(Duration::from_millis(1_000));
+    if cancellable {
+        fake = fake.with_cancellable_start();
+    }
+    let host = Arc::new(fake);
+    ui.app.online().set_host(host.clone());
+    ui.open_menu();
+    ui.fill("Pseudo", "Alice");
+    ui.click(
+        "Internet : tunnel gratuit, sans compte",
+        Some(AccessibleRole::RadioButton),
+    );
+    ui.button("Héberger une partie"); // start A (the tunnel), slow
+    assert!(ui.online().get_busy());
+    ui.button("Retour");
+    assert!(!ui.online().get_active());
+
+    ui.open_menu();
+    ui.click(
+        "Réseau local : même Wi-Fi ou même maison",
+        Some(AccessibleRole::RadioButton),
+    );
+    ui.button("Héberger une partie"); // start B, queued behind A and its cancellation
+    if !cancellable {
+        // the slow start cannot be aborted: B really waits behind it, and says so
+        assert!(
+            ui.online().get_busy_text().contains("précédent"),
+            "says the previous attempt is being closed: {}",
+            ui.online().get_busy_text()
+        );
+    }
+
+    // Only B's server is ever connected to, and it stays up.
+    ui.wait("the room request", |_| server.hellos().len() == 1);
+    assert!(matches!(ui.next_msg(&server), ClientMsg::CreateRoom { .. }));
+    server.send(lobby_msg(
+        course_config(),
+        vec![player(1, "Alice", true, true)],
+    ));
+    ui.wait("the lobby", |ui| ui.screen() == OnlineScreen::Lobby);
+    assert_eq!(
+        host.log(),
+        ["start(Tunnel)", "stop", "start(Lan)"],
+        "strictly one after the other: A, the stop that cancels A, then B"
+    );
+    assert!(host.is_running(), "B is the server that is running");
+    assert_eq!(
+        server.connections(),
+        1,
+        "the abandoned attempt never connected"
+    );
+    assert!(ui.no_msg(&server));
+    assert_eq!(host.log().len(), 3, "and nothing stopped B afterwards");
+}
+
+#[test]
+fn going_back_during_a_slow_start_and_hosting_again_ends_in_a_lobby() {
+    slow_start_then_back_then_host_again(false);
+}
+
+#[test]
+fn the_same_when_the_host_can_abort_a_start() {
+    slow_start_then_back_then_host_again(true);
+}
+
+#[test]
+fn closing_the_window_while_the_server_is_starting_waits_for_it_and_stops_it() {
+    let ui = ui(1000, 760);
+    let server = MockServer::start();
+    let host =
+        Arc::new(FakeHost::ok(host_info(&server)).with_start_delay(Duration::from_millis(1_000)));
+    ui.app.online().set_host(host.clone());
+    ui.open_menu();
+    ui.fill("Pseudo", "Alice");
+    ui.button("Héberger une partie");
+    assert!(
+        ui.app.online().request_close(),
+        "nothing to confirm: the game does not exist yet"
+    );
+    let waited = Instant::now();
+    assert!(
+        ui.app
+            .online()
+            .wait_for_pending_stops(Duration::from_secs(8))
+    );
+    assert!(
+        waited.elapsed() >= Duration::from_millis(300),
+        "the exit waited for the start that was in flight"
+    );
+    assert_eq!(host.log(), ["start(Lan)", "stop"]);
+    assert!(
+        !host.is_running(),
+        "what the start brought up is stopped before the process ends"
+    );
+}
+
+#[test]
+fn a_start_that_can_be_aborted_is_aborted_at_once_when_the_window_closes() {
+    let ui = ui(1000, 760);
+    let server = MockServer::start();
+    let host = Arc::new(
+        FakeHost::ok(host_info(&server))
+            .with_start_delay(Duration::from_secs(30))
+            .with_cancellable_start(),
+    );
+    ui.app.online().set_host(host.clone());
+    ui.open_menu();
+    ui.fill("Pseudo", "Alice");
+    ui.button("Héberger une partie");
+    std::thread::sleep(Duration::from_millis(100)); // the worker has picked the start up
+    assert!(ui.app.online().request_close());
+    let waited = Instant::now();
+    assert!(
+        ui.app
+            .online()
+            .wait_for_pending_stops(Duration::from_secs(8))
+    );
+    assert!(
+        waited.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        waited.elapsed()
+    );
+    assert!(!host.is_running());
+}
+
+#[test]
+fn the_exit_wait_outlasts_the_servers_own_five_second_grace() {
+    // The server may spend its whole 5 s grace saying goodbye; the tunnel is killed after that.
+    assert!(boussole::online_ui::EXIT_WAIT >= Duration::from_secs(8));
+}
+
 #[test]
 fn a_slow_server_shutdown_never_blocks_the_window() {
     // Stopping the server (goodbyes to every client, killing cloudflared) can take seconds.

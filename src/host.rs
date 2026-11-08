@@ -95,6 +95,8 @@ pub enum HostError {
     TunnelNotInstalled,
     /// `cloudflared` started but gave no usable address (carries the technical reason).
     TunnelFailed(String),
+    /// The start was abandoned (the player went back, or the app is closing).
+    Cancelled,
     /// Anything else (carries the technical reason).
     Other(String),
 }
@@ -110,6 +112,7 @@ impl fmt::Display for HostError {
             Self::TunnelFailed(_) => f.write_str(
                 "Tunnel indisponible : cloudflared n’a pas donné d’adresse. Réessayez, ou jouez en réseau local.",
             ),
+            Self::Cancelled => f.write_str("Démarrage annulé."),
             Self::Other(why) => write!(f, "Impossible de démarrer la partie : {why}"),
         }
     }
@@ -151,6 +154,13 @@ pub trait Host: Send + Sync {
     /// runs.
     fn stop(&self);
 
+    /// Abandon the [`Host::start`] that is running right now (the player went back, or the app
+    /// is closing): it returns [`HostError::Cancelled`] soon after, with nothing left running
+    /// (a tunnel being opened is killed, the server that was started for it stopped). Called from
+    /// the UI thread, so it must only flag the request and return at once. Does nothing when no
+    /// start is running, and never affects a start that begins later. The default does nothing.
+    fn cancel_start(&self) {}
+
     /// Is what [`Host::start`] started still alive? The UI asks about once a second *from the UI
     /// thread*, so this must be cheap and never block: the real host answers from
     /// `ServerHandle::is_running()` and `Tunnel::is_running()`.
@@ -183,6 +193,11 @@ pub struct FakeHost {
     stops: AtomicUsize,
     health: Mutex<HostHealth>,
     stop_delay: Mutex<std::time::Duration>,
+    start_delay: Mutex<std::time::Duration>,
+    cancellable: std::sync::atomic::AtomicBool,
+    cancel_gen: std::sync::atomic::AtomicU64,
+    running: std::sync::atomic::AtomicBool,
+    log: Mutex<Vec<String>>,
 }
 
 impl FakeHost {
@@ -195,6 +210,11 @@ impl FakeHost {
             stops: AtomicUsize::new(0),
             health: Mutex::new(HostHealth::Running),
             stop_delay: Mutex::new(std::time::Duration::ZERO),
+            start_delay: Mutex::new(std::time::Duration::ZERO),
+            cancellable: std::sync::atomic::AtomicBool::new(false),
+            cancel_gen: std::sync::atomic::AtomicU64::new(0),
+            running: std::sync::atomic::AtomicBool::new(false),
+            log: Mutex::new(Vec::new()),
         }
     }
 
@@ -207,6 +227,11 @@ impl FakeHost {
             stops: AtomicUsize::new(0),
             health: Mutex::new(HostHealth::Running),
             stop_delay: Mutex::new(std::time::Duration::ZERO),
+            start_delay: Mutex::new(std::time::Duration::ZERO),
+            cancellable: std::sync::atomic::AtomicBool::new(false),
+            cancel_gen: std::sync::atomic::AtomicU64::new(0),
+            running: std::sync::atomic::AtomicBool::new(false),
+            log: Mutex::new(Vec::new()),
         }
     }
 
@@ -239,6 +264,31 @@ impl FakeHost {
         self
     }
 
+    /// Make `start` take this long (binding, waiting for a tunnel's address): the UI must stay
+    /// usable meanwhile.
+    pub fn with_start_delay(self, delay: std::time::Duration) -> Self {
+        *self.start_delay.lock().unwrap() = delay;
+        self
+    }
+
+    /// Let [`Host::cancel_start`] abort a slow `start` (answering [`HostError::Cancelled`]), like
+    /// the real host does; by default a fake's start runs to its end.
+    pub fn with_cancellable_start(self) -> Self {
+        self.cancellable
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self
+    }
+
+    /// Is a server (as far as this fake knows) up: a `start` succeeded and no `stop` followed.
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
+    /// The calls received so far, in order: `start(Lan)`, `start(Tunnel)`, `stop`.
+    pub fn log(&self) -> Vec<String> {
+        self.log.lock().unwrap().clone()
+    }
+
     /// What [`Host::health`] answers from now on (a crashed server, a dead tunnel).
     pub fn set_health(&self, health: HostHealth) {
         *self.health.lock().unwrap() = health;
@@ -247,17 +297,39 @@ impl FakeHost {
 
 impl Host for FakeHost {
     fn start(&self, mode: HostMode) -> Result<HostInfo, HostError> {
+        self.log.lock().unwrap().push(format!("start({mode:?})"));
         self.started.lock().unwrap().push(mode);
-        match mode {
+        let delay = *self.start_delay.lock().unwrap();
+        let generation = self.cancel_gen.load(Ordering::SeqCst);
+        let began = std::time::Instant::now();
+        while began.elapsed() < delay {
+            if self.cancellable.load(Ordering::SeqCst)
+                && self.cancel_gen.load(Ordering::SeqCst) != generation
+            {
+                return Err(HostError::Cancelled);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let result = match mode {
             HostMode::Lan => self.lan.lock().unwrap().clone(),
             HostMode::Tunnel => self.tunnel.lock().unwrap().clone(),
+        };
+        if result.is_ok() {
+            self.running.store(true, Ordering::SeqCst);
         }
+        result
     }
 
     fn stop(&self) {
+        self.log.lock().unwrap().push("stop".to_owned());
         let delay = *self.stop_delay.lock().unwrap();
         std::thread::sleep(delay);
+        self.running.store(false, Ordering::SeqCst);
         self.stops.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn cancel_start(&self) {
+        self.cancel_gen.fetch_add(1, Ordering::SeqCst);
     }
 
     fn health(&self) -> HostHealth {

@@ -451,7 +451,7 @@ impl App {
         // The window is gone: give the connection its goodbye and a hosted server the time to
         // tell its players the game is over, but never hold the process for long.
         self.online
-            .wait_for_pending_stops(std::time::Duration::from_secs(5));
+            .wait_for_pending_stops(crate::online_ui::EXIT_WAIT);
         result
     }
 }

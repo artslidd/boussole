@@ -16,6 +16,7 @@ pub mod clipboard;
 pub mod embedded_host;
 pub mod headless;
 pub mod host;
+pub mod host_worker;
 pub mod net;
 pub mod online;
 pub mod online_ui;

@@ -265,6 +265,93 @@ fn a_failing_or_slow_tunnel_is_reported_as_unavailable() {
     }
 }
 
+// --- overlapping calls (review S1) ----------------------------------------------------------------
+
+#[test]
+fn overlapping_start_and_stop_calls_are_serialised() {
+    // A slow (failing) tunnel start overlapping a LAN start: the second waits for the first, and
+    // what the first leaves behind never touches the second's server.
+    let host = Arc::new(EmbeddedHost::with_tunnel_starter(|_| {
+        Box::pin(async {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            Err(TunnelError::NotInstalled)
+        })
+    }));
+    let first = {
+        let host = host.clone();
+        std::thread::spawn(move || {
+            let result = host.start(HostMode::Tunnel);
+            (result, Instant::now())
+        })
+    };
+    std::thread::sleep(Duration::from_millis(100));
+    let second = host.start(HostMode::Lan);
+    let second_done = Instant::now();
+    let (first_result, first_done) = first.join().unwrap();
+    assert_eq!(first_result, Err(HostError::TunnelNotInstalled));
+    assert!(
+        second_done >= first_done,
+        "the second start waited for the first"
+    );
+    let info = second.expect("the LAN game starts");
+    assert!(host.is_running());
+    assert!(
+        !port_is_free(info.port),
+        "the second server is the one listening"
+    );
+    host.stop();
+    assert!(port_is_free(info.port));
+}
+
+#[test]
+fn cancelling_a_start_aborts_a_slow_tunnel_and_leaves_nothing_running() {
+    let seen_port = Arc::new(Mutex::new(None));
+    let spy = seen_port.clone();
+    // `cloudflared` that never prints an address
+    let host = Arc::new(EmbeddedHost::with_tunnel_starter(move |port| {
+        *spy.lock().unwrap() = Some(port);
+        Box::pin(std::future::pending())
+    }));
+    let start = {
+        let host = host.clone();
+        std::thread::spawn(move || host.start(HostMode::Tunnel))
+    };
+    let deadline = Instant::now() + WAIT;
+    let port = loop {
+        if let Some(port) = *seen_port.lock().unwrap() {
+            break port;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the start reached the tunnel step"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let cancelled_at = Instant::now();
+    host.cancel_start();
+    assert_eq!(start.join().unwrap(), Err(HostError::Cancelled));
+    assert!(
+        cancelled_at.elapsed() < Duration::from_secs(3),
+        "aborted at once, not after 20 s"
+    );
+    assert!(!host.is_running());
+    assert!(
+        port_is_free(port),
+        "the server started for the tunnel is gone again"
+    );
+}
+
+#[test]
+fn a_cancel_with_nothing_starting_does_not_cancel_the_next_start() {
+    let host = host();
+    host.cancel_start();
+    let info = host
+        .start(HostMode::Lan)
+        .expect("a stale cancel does not abort a later start");
+    host.stop();
+    assert!(port_is_free(info.port));
+}
+
 // --- health -------------------------------------------------------------------------------------
 
 #[test]
