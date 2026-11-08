@@ -27,8 +27,8 @@ async fn host_mode_server_plays_a_match_in_the_callers_runtime_and_releases_its_
     host.send(&ClientMsg::StartMatch).await;
 
     let (a, b) = tokio::join!(
-        play_course(&mut host, Difficulty::Facile, 1, 0),
-        play_course(&mut guest, Difficulty::Facile, 1, 50),
+        play_course(&mut host, Difficulty::Facile, 1, 1),
+        play_course(&mut guest, Difficulty::Facile, 1, 2),
     );
     assert_eq!(
         a.match_ended, b.match_ended,

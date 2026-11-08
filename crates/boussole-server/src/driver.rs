@@ -221,4 +221,56 @@ mod tests {
         assert!(!is_create_room(r#"{"type":"ping"}"#));
         assert!(!is_create_room("not json"));
     }
+
+    #[tokio::test]
+    async fn a_full_queue_kicks_the_connection_and_tells_the_engine() {
+        use crate::engine::SeededEntropy;
+        use boussole_protocol::encode_client;
+
+        let mut d = Driver {
+            engine: Engine::new(Box::new(SeededEntropy::new(1))),
+            clock: Clock::new(1),
+            max_rooms: 10,
+            sinks: HashMap::new(),
+        };
+        // A connection that never drains its queue (capacity 1).
+        let (tx, _never_read) = mpsc::channel(1);
+        let kick = Arc::new(Notify::new());
+        d.on_cmd(Cmd::Open {
+            conn: 7,
+            out: tx,
+            kick: Arc::clone(&kick),
+        });
+        let hello = encode_client(&ClientMsg::hello("Slow", None));
+        d.on_cmd(Cmd::Frame {
+            conn: 7,
+            text: hello.clone(),
+        }); // the welcome fills the queue
+        assert_eq!(d.engine.player_count(), 1);
+        assert!(d.sinks.contains_key(&7));
+
+        d.on_cmd(Cmd::Frame {
+            conn: 7,
+            text: r#"{"type":"ping"}"#.into(),
+        }); // the pong does not fit: slow consumer
+        assert!(
+            !d.sinks.contains_key(&7),
+            "kicked connections are forgotten"
+        );
+        tokio::time::timeout(Duration::from_secs(1), kick.notified())
+            .await
+            .expect("the connection task is woken to drop the socket");
+        assert_eq!(
+            d.engine.player_count(),
+            0,
+            "the engine was told, and a player in no room is forgotten at once"
+        );
+
+        // Frames still in flight from the kicked connection are ignored.
+        d.on_cmd(Cmd::Frame {
+            conn: 7,
+            text: hello,
+        });
+        assert_eq!(d.engine.player_count(), 0);
+    }
 }

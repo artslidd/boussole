@@ -2,7 +2,6 @@
 //! clients speaking the `boussole-protocol` types.
 #![allow(dead_code)]
 
-use boussole_core::cities::CITIES;
 use boussole_protocol::*;
 use boussole_server::{ServerConfig, ServerHandle, start};
 use std::net::SocketAddr;
@@ -12,6 +11,10 @@ use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
+
+#[path = "../../examples/bot/strategy.rs"]
+pub mod strategy;
+use strategy::Strategy;
 
 /// Longest a test waits for one message.
 pub const WAIT: Duration = Duration::from_secs(10);
@@ -103,6 +106,15 @@ impl TestClient {
             .await
             .expect("send timeout")
             .expect("send");
+    }
+
+    /// Like `send_ws` but reports failure instead of panicking (the server may have hung up).
+    pub async fn try_send_ws(&mut self, msg: Message) -> bool {
+        use futures_util::SinkExt;
+        matches!(
+            timeout(Duration::from_millis(500), self.ws.send(msg)).await,
+            Ok(Ok(()))
+        )
     }
 
     /// Next frame (ping/pong frames are skipped).
@@ -244,17 +256,13 @@ pub struct Played {
     pub guesses: Vec<Vec<GuessInfo>>,
 }
 
-fn city(offset: usize, round: usize, i: usize) -> &'static str {
-    CITIES[(offset + round * 13 + i * 7) % CITIES.len()].name
-}
-
-/// Play every round of a Course match: guess distinct cities until solved or out of tries.
+/// Play every round of a Course match with the bot's strategy until solved or out of tries.
 /// Checks secret safety on every frame of every round.
 pub async fn play_course(
     c: &mut TestClient,
     difficulty: Difficulty,
     rounds: usize,
-    offset: usize,
+    seed: u64,
 ) -> Played {
     let mut out = Played {
         rounds: vec![],
@@ -266,6 +274,7 @@ pub async fn play_course(
         guesses: vec![],
     };
     let me = c.id;
+    let mut strat = Strategy::new(seed);
     for round in 0..rounds {
         let started = c
             .recv_where(|m| match m {
@@ -276,9 +285,10 @@ pub async fn play_course(
         let first_frame = c.frames.len() - 1;
         assert_eq!(usize::from(started.round_index), round + 1);
         let mut mine = Vec::new();
-        for i in 0.. {
+        strat.reset();
+        loop {
             c.send(&ClientMsg::Guess {
-                city: city(offset, round, i).into(),
+                city: strat.next_guess().into(),
             })
             .await;
             let g = c
@@ -288,6 +298,7 @@ pub async fn play_course(
                 })
                 .await;
             let done = g.correct || g.tries_used == MAX_TRIES;
+            strat.observe(&g);
             mine.push(g);
             if done {
                 break;
@@ -317,14 +328,13 @@ pub async fn play_course(
     out
 }
 
-/// Play every round of a Coopération match, guessing whenever it is this client's turn.
-/// `offset` must differ by at least 40 between clients of one room so the team never repeats
-/// a city.
+/// Play every round of a Coopération match, guessing whenever it is this client's turn and
+/// learning from every guess of the team.
 pub async fn play_coop(
     c: &mut TestClient,
     difficulty: Difficulty,
     rounds: usize,
-    offset: usize,
+    seed: u64,
 ) -> Played {
     let mut out = Played {
         rounds: vec![],
@@ -336,7 +346,8 @@ pub async fn play_coop(
         guesses: vec![],
     };
     let me = c.id;
-    for round in 0..rounds {
+    let mut strat = Strategy::new(seed);
+    for _ in 0..rounds {
         let started = c
             .recv_where(|m| match m {
                 ServerMsg::RoundStarted(r) => Some(r.clone()),
@@ -345,16 +356,15 @@ pub async fn play_coop(
             .await;
         let first_frame = c.frames.len() - 1;
         let mut my_turn = matches!(started.timer, Timer::Turn { player_id, .. } if player_id == me);
-        let mut next_pick = 0;
+        strat.reset();
         let mut seen = Vec::new();
         let ended = loop {
             if my_turn {
                 my_turn = false;
                 c.send(&ClientMsg::Guess {
-                    city: city(offset, round, next_pick).into(),
+                    city: strat.next_guess().into(),
                 })
                 .await;
-                next_pick += 1;
             }
             enum Ev {
                 Turn,
@@ -376,7 +386,10 @@ pub async fn play_coop(
                 .await;
             match ev {
                 Ev::Turn => my_turn = true,
-                Ev::Guess(g) => seen.push(g),
+                Ev::Guess(g) => {
+                    strat.observe(&g);
+                    seen.push(g);
+                }
                 Ev::Ended(e) => break e,
                 // A refused guess keeps the turn (duplicate) or was late (timeout): retry next
                 // time we are told it is our turn, or right away for a duplicate.
