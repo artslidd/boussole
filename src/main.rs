@@ -16,6 +16,14 @@ fn main() -> Result<(), slint::PlatformError> {
             App::with_time_seeds()?
         }
     };
+    // A hard exit (crash, kill -9) of an earlier run cannot stop the cloudflared it started: close
+    // such leftovers now, in the background (only our own recorded tunnels, see `orphan_guard`).
+    std::thread::spawn(|| {
+        let closed = boussole::orphan_guard::reap_previous_runs();
+        if closed > 0 {
+            eprintln!("boussole: closed {closed} tunnel(s) left running by an earlier run");
+        }
+    });
     // "Héberger une partie" runs the Boussole server inside this process (and, on request, a
     // free Cloudflare tunnel). Nothing starts until the player asks for it.
     app.online().set_host(Arc::new(EmbeddedHost::new()));

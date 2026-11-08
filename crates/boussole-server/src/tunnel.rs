@@ -99,6 +99,13 @@ impl Tunnel {
         &self.ws_url
     }
 
+    /// The process id of the `cloudflared` child, while it runs. A host application records it
+    /// so that a tunnel left behind by a hard exit (crash, `kill -9`) can be closed at the next
+    /// launch: `kill_on_drop` only works when the `Tunnel` is dropped.
+    pub fn pid(&self) -> Option<u32> {
+        self.child.id()
+    }
+
     /// `false` once `cloudflared` has exited (crash, lost network, killed): the address from
     /// [`Tunnel::public_ws_url`] is dead from then on and nothing restarts it.
     pub fn is_running(&mut self) -> bool {
@@ -437,6 +444,7 @@ mod tests {
             );
             let pid = fake.pid();
             assert!(alive(pid));
+            assert_eq!(tunnel.pid(), Some(pid), "pid() is the cloudflared child");
             tunnel.stop().await;
             assert_dies(pid).await;
             assert!(

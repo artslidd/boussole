@@ -113,6 +113,14 @@ From the start screen choose **Jouer en ligne**, type a **Pseudo** (1 to 16 char
   the lobby says *Partagez l’adresse dans quelques secondes*. If the tunnel dies later the header
   says *Tunnel perdu* and the Internet address is greyed out (players already on the local network
   keep playing); if the embedded server itself stops, the host is sent back to the menu.
+* **Quitting while hosting.** Closing the window, **Quitter**, ⌘Q and the macOS application menu's
+  *Quit* all ask first (*Quitter fermera la partie pour tout le monde*), then tell the players, stop
+  the server and close the tunnel. If the app is killed abruptly (a crash, `kill -9`, SIGTERM),
+  the `cloudflared` it started cannot be stopped by it; the app notes it (a small file in the
+  temporary directory) and the **next launch closes it**, and only it: the process must still be a
+  `cloudflared tunnel … --url http://127.0.0.1:<that port>` of an app that is no longer running,
+  so another `cloudflared` on the machine is never touched. Until then the public address stays
+  up and leads nowhere.
 * **Connection loss.** The header shows *Reconnexion…* with the seconds left; the app retries for
   up to 60 s with the session's resume token, and the server restores your place, your guesses and
   the clock. After that you are offered *Retour au menu*.
@@ -193,7 +201,9 @@ every message with a JSON example, state diagrams, timers, scoring, error codes,
     `text` (label measurement with the embedded font), `online` (the online reducer, its
     French texts and the view-model of each online screen), `net` (address normalisation and the
     WebSocket client), `host` (the `Host` trait behind *Héberger une partie*, with a fake for
-    tests), `embedded_host` (the real one: the server embedded in the app, plus the tunnel), `clipboard`;
+    tests), `embedded_host` (the real one: the server embedded in the app, plus the tunnel),
+    `host_worker` (the one queue every host start and stop goes through), `orphan_guard` (closes a
+    tunnel a hard exit left behind), `macos_quit` (⌘Q takes the window-close path), `clipboard`;
   - **Slint glue:** `app` (a `Session` behind the window), `online_ui` (the online mode's
     controller: state, connection, hosting, clipboard) and `headless` (a window without a screen,
     for screenshots and UI tests).
@@ -213,7 +223,8 @@ every message with a JSON example, state diagrams, timers, scoring, error codes,
   against a scripted WebSocket server in `tests/common`: handshake errors, reconnect with the
   token, giving up, the server going away), `online_flow` (the online screens driven by keys and
   clicks), `embedded_host` (the real embedded server: a two-client match, the port released,
-  the tunnel path with an injected starter, never a real tunnel) and `online_hosting` (the whole
+  the tunnel path with an injected starter, never a real tunnel), `orphan_guard` (the record and
+  the cleanup, with fake and real stand-in processes) and `online_hosting` (the whole
   "Héberger une partie" journey through the UI and the real server).
 
 ## Tests and quality gate

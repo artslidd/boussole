@@ -21,5 +21,6 @@ pub mod macos_quit;
 pub mod net;
 pub mod online;
 pub mod online_ui;
+pub mod orphan_guard;
 pub mod session;
 pub mod text;

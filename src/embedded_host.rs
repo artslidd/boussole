@@ -7,11 +7,13 @@
 //! start, so a player who only plays solo never pays for it.
 
 use crate::host::{Host, HostError, HostHealth, HostInfo, HostMode};
+use crate::orphan_guard::{self, TunnelRecord};
 use boussole_server::tunnel::{self, Tunnel, TunnelError};
 use boussole_server::{ServerConfig, ServerHandle, lan_ws_urls, start};
 use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -53,6 +55,9 @@ pub struct EmbeddedHost {
     lifecycle: Mutex<()>,
     /// Bumped by [`Host::cancel_start`]; a start in flight watches it.
     cancel: watch::Sender<u64>,
+    /// Where the running tunnel is written down, so that a hard exit of the app cannot leave it
+    /// running unnoticed (see `orphan_guard`). `None`: nothing is written.
+    record_dir: Option<PathBuf>,
 }
 
 impl EmbeddedHost {
@@ -60,6 +65,7 @@ impl EmbeddedHost {
     /// tunnels run the real `cloudflared`.
     pub fn new() -> Self {
         Self::with_lan_bind(SocketAddr::from(([0, 0, 0, 0], PREFERRED_LAN_PORT)))
+            .with_record_dir(orphan_guard::default_dir())
     }
 
     /// Like [`EmbeddedHost::new`] with another address to try first for local-network games
@@ -72,7 +78,15 @@ impl EmbeddedHost {
             running: Mutex::new(None),
             lifecycle: Mutex::new(()),
             cancel: watch::channel(0).0,
+            record_dir: None,
         }
+    }
+
+    /// Write down the tunnel this host starts in `dir` while it runs, and delete the note when it
+    /// stops. [`EmbeddedHost::new`] does it in the usual place; the other constructors do not.
+    pub fn with_record_dir(mut self, dir: PathBuf) -> Self {
+        self.record_dir = Some(dir);
+        self
     }
 
     /// A host whose tunnels are started by `starter` instead of the real `cloudflared`: tests
@@ -145,6 +159,7 @@ impl EmbeddedHost {
                 };
                 match tunnel {
                     Ok(tunnel) => {
+                        self.record_tunnel(&tunnel, port);
                         let info = HostInfo {
                             port,
                             local_url: format!("ws://127.0.0.1:{port}/ws"),
@@ -225,6 +240,25 @@ impl EmbeddedHost {
                 tunnel.stop().await;
             }
         });
+        if let Some(dir) = &self.record_dir {
+            orphan_guard::remove_record(dir, std::process::id());
+        }
+    }
+
+    /// Note which `cloudflared` this app started, for the cleanup after a hard exit. Failing to
+    /// write it must not stop the game: the tunnel simply is not protected.
+    fn record_tunnel(&self, tunnel: &Tunnel, port: u16) {
+        let (Some(dir), Some(tunnel_pid)) = (&self.record_dir, tunnel.pid()) else {
+            return;
+        };
+        let record = TunnelRecord {
+            app_pid: std::process::id(),
+            tunnel_pid,
+            port,
+        };
+        if let Err(error) = orphan_guard::write_record(dir, &record) {
+            eprintln!("Boussole: could not note the tunnel for cleanup: {error}");
+        }
     }
 }
 
