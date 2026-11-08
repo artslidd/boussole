@@ -17,7 +17,9 @@ use crate::app::{
 };
 use crate::board::{self, HintLabel};
 use crate::clipboard::{Clipboard, SystemClipboard};
-use crate::host::{Host, HostError, HostInfo, HostMode, ShareAddress, UnavailableHost};
+use crate::host::{
+    Host, HostError, HostHealth, HostInfo, HostMode, ShareAddress, ShareKind, UnavailableHost,
+};
 use crate::net::{AddressError, NetConfig, NetEvent, NetHandle, normalize_address};
 use crate::online::state::{Link, OnlineState, apply, set_link};
 use crate::online::view::{
@@ -42,6 +44,11 @@ const POLL: Duration = Duration::from_millis(40);
 const TICK: Duration = Duration::from_millis(200);
 /// How long "Copié" stays on a copy button.
 const COPIED_FOR: Duration = Duration::from_secs(2);
+/// How often the hosted server and tunnel are asked whether they are still alive.
+const HEALTH_EVERY: Duration = Duration::from_secs(1);
+/// How long a fresh tunnel address is said to need before it answers (cloudflared prints the
+/// address before it is reachable).
+const TUNNEL_WARM_UP: Duration = Duration::from_secs(10);
 /// A guess the server has not answered after this long is given up on (the field reopens).
 const GUESS_TIMEOUT: Duration = Duration::from_secs(8);
 
@@ -89,7 +96,7 @@ enum CopyTarget {
 #[derive(Default)]
 struct Pushed {
     players: Vec<view::LobbyPlayer>,
-    share: Vec<(ShareAddress, bool)>,
+    share: Vec<(ShareAddress, bool, bool)>,
     scoreboard: Vec<view::ScoreRow>,
     history: Vec<view::HistoryRow>,
     results: Vec<view::ResultRow>,
@@ -110,6 +117,13 @@ struct Core {
     host_started: bool,
     /// The server address typed for a remote room (shown as the address to share).
     remote_url: Option<String>,
+    /// The host chose the Internet tunnel (so its address needs a moment to answer).
+    hosting_tunnel: bool,
+    /// When the embedded server came up (to word the tunnel address's warm-up).
+    host_started_at: Option<Instant>,
+    /// The tunnel died while the server still runs (sticky: it does not come back).
+    tunnel_lost: bool,
+    last_health: Instant,
     // menu
     nickname_error: String,
     address_error: String,
@@ -173,6 +187,10 @@ impl OnlineUi {
                 hosted: None,
                 host_started: false,
                 remote_url: None,
+                hosting_tunnel: false,
+                host_started_at: None,
+                tunnel_lost: false,
+                last_health: now,
                 nickname_error: String::new(),
                 address_error: String::new(),
                 code_error: String::new(),
@@ -298,7 +316,8 @@ impl OnlineUi {
             self.now().saturating_duration_since(core.last_sync) >= TICK
         };
         let expired = self.expire_transients();
-        if had_events || due || expired {
+        let health_changed = self.check_host_health();
+        if had_events || due || expired || health_changed {
             self.sync();
         }
     }
@@ -501,6 +520,7 @@ impl OnlineUi {
             }
             core.stage = Stage::Starting;
             core.intent = Some(Intent::Host);
+            core.hosting_tunnel = mode == HostMode::Tunnel;
             core.busy_text = match mode {
                 HostMode::Lan => "Démarrage de la partie…".to_owned(),
                 HostMode::Tunnel => "Ouverture du tunnel gratuit… (quelques secondes)".to_owned(),
@@ -626,6 +646,9 @@ impl OnlineUi {
                     let mut core = self.inner.core.borrow_mut();
                     core.hosted = Some(info);
                     core.host_started = true;
+                    core.host_started_at = Some(self.now());
+                    core.last_health = self.now();
+                    core.tunnel_lost = false;
                     core.stage = Stage::Connecting;
                     core.busy_text = "Création de la salle…".to_owned();
                     self.inner
@@ -845,6 +868,9 @@ impl OnlineUi {
             core.intent = None;
             core.hosted = None;
             core.remote_url = None;
+            core.hosting_tunnel = false;
+            core.host_started_at = None;
+            core.tunnel_lost = false;
             core.autocomplete.clear();
             core.pending = None;
             core.notice = None;
@@ -1053,6 +1079,35 @@ impl OnlineUi {
         self.sync();
     }
 
+    /// Ask the embedded server and tunnel whether they are still alive (about once a second).
+    /// A stopped server ends the game for everybody: back to the menu. A lost tunnel only kills
+    /// the Internet address: the game goes on and the host is told. `true` if anything changed.
+    fn check_host_health(&self) -> bool {
+        let now = self.now();
+        {
+            let mut core = self.inner.core.borrow_mut();
+            if core.hosted.is_none()
+                || now.saturating_duration_since(core.last_health) < HEALTH_EVERY
+            {
+                return false;
+            }
+            core.last_health = now;
+        }
+        // Cheap and non-blocking by contract (see `Host::health`).
+        let health = self.inner.host.borrow().health();
+        match health {
+            HostHealth::Running => false,
+            HostHealth::ServerStopped => {
+                self.fail_to_menu(crate::online::text::OWN_SERVER_STOPPED.to_owned(), None);
+                true
+            }
+            HostHealth::TunnelLost => {
+                let mut core = self.inner.core.borrow_mut();
+                !std::mem::replace(&mut core.tunnel_lost, true)
+            }
+        }
+    }
+
     /// Time-based clean-ups; `true` if something changed on screen.
     fn expire_transients(&self) -> bool {
         let now = self.now();
@@ -1125,6 +1180,7 @@ fn share_addresses(core: &Core) -> Vec<ShareAddress> {
     {
         return vec![ShareAddress {
             label: "Serveur".to_owned(),
+            kind: ShareKind::Server,
             url: url.clone(),
         }];
     }
@@ -1225,6 +1281,10 @@ impl OnlineUi {
                 online.set_banner_kind(BannerKind::Lost);
                 online.set_banner_text(text.into());
             }
+            None if core.tunnel_lost && core.hosted.is_some() => {
+                online.set_banner_kind(BannerKind::TunnelLost);
+                online.set_banner_text("Tunnel perdu".into());
+            }
             None => {
                 online.set_banner_kind(BannerKind::None);
                 online.set_banner_text("".into());
@@ -1259,7 +1319,7 @@ impl OnlineUi {
         online.set_help(core.help);
     }
 
-    fn sync_lobby(&self, online: &Online<'_>, core: &mut Core, _now: Instant) {
+    fn sync_lobby(&self, online: &Online<'_>, core: &mut Core, now: Instant) {
         let Some(lobby) = view::lobby(&core.state) else {
             return;
         };
@@ -1267,13 +1327,14 @@ impl OnlineUi {
         online.set_code_copied(matches!(core.copied, Some((CopyTarget::Code, _))));
 
         let share = share_addresses(core);
-        let share_pairs: Vec<(ShareAddress, bool)> = share
+        let share_pairs: Vec<(ShareAddress, bool, bool)> = share
             .iter()
             .enumerate()
             .map(|(i, a)| {
                 (
                     a.clone(),
                     matches!(core.copied, Some((CopyTarget::Address(j), _)) if j == i),
+                    core.tunnel_lost && a.kind == ShareKind::Tunnel,
                 )
             })
             .collect();
@@ -1281,10 +1342,11 @@ impl OnlineUi {
             online.set_share_addresses(model(
                 share_pairs
                     .iter()
-                    .map(|(a, copied)| ShareAddressView {
+                    .map(|(a, copied, lost)| ShareAddressView {
                         label: a.label.as_str().into(),
                         url: a.url.as_str().into(),
                         copied: *copied,
+                        lost: *lost,
                     })
                     .collect(),
             ));
@@ -1294,6 +1356,14 @@ impl OnlineUi {
             notice.clone()
         } else if !lobby.i_am_host {
             "Attendez que l’hôte lance la partie.".to_owned()
+        } else if core.tunnel_lost && core.hosted.is_some() {
+            "Tunnel perdu : adresse Internet coupée.".to_owned()
+        } else if core.hosting_tunnel
+            && core
+                .host_started_at
+                .is_some_and(|at| now.saturating_duration_since(at) < TUNNEL_WARM_UP)
+        {
+            "Partagez l’adresse dans quelques secondes.".to_owned()
         } else if core.hosted.is_some() && share.is_empty() {
             "Aucune adresse réseau détectée : vérifiez votre Wi-Fi ou utilisez le tunnel."
                 .to_owned()

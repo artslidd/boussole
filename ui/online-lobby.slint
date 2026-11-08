@@ -30,16 +30,16 @@ component ShareRow inherits Rectangle {
             height: 28px;
             y: (parent.height - self.height) / 2;
             border-radius: 14px;
-            background: Theme.amber-wash;
+            background: root.entry.lost ? Theme.signal-wash : Theme.amber-wash;
             border-width: 1.5px;
-            border-color: Theme.ink;
+            border-color: root.entry.lost ? Theme.signal : Theme.ink;
             Text {
                 width: 100%;
                 height: 100%;
                 text: root.entry.label;
                 font-size: 12.5px;
                 font-weight: 600;
-                color: Theme.ink;
+                color: root.entry.lost ? Theme.signal-ink : Theme.ink;
                 horizontal-alignment: center;
                 vertical-alignment: center;
             }
@@ -62,10 +62,10 @@ component ShareRow inherits Rectangle {
                 single-line: true;
                 text: root.entry.url;
                 font-size: 13.5px;
-                color: Theme.ink;
+                color: root.entry.lost ? Theme.ink-soft : Theme.ink;
                 vertical-alignment: center;
                 accessible-role: text-input;
-                accessible-label: "Adresse à partager (" + root.entry.label + ")";
+                accessible-label: "Adresse à partager (" + root.entry.label + ")" + (root.entry.lost ? ", tunnel perdu" : "");
                 accessible-read-only: true;
             }
         }
@@ -73,6 +73,7 @@ component ShareRow inherits Rectangle {
         ActionButton {
             text: root.entry.copied ? "Copié" : "Copier";
             accessible-description: "Copier l’adresse " + root.entry.url;
+            enabled: !root.entry.lost;
             primary: false;
             compact: true;
             min-width: 72px;

@@ -10,7 +10,7 @@
 use boussole::app::{App, HostChoice, Online};
 use boussole::clipboard::MemoryClipboard;
 use boussole::headless::Headless;
-use boussole::host::{FakeHost, HostError, HostInfo};
+use boussole::host::{FakeHost, HostError, HostHealth, HostInfo};
 use boussole::net::NetEvent;
 use boussole_protocol::{
     Difficulty, GuessEntry, GuessInfo, HintDto, MatchEnded, Mode, PlayerInfo, PlayerRoundResult,
@@ -568,6 +568,21 @@ fn main() -> Result<()> {
     s.shoot("16-connection-lost.png")?;
 
     // 18 · 8 players at the minimum window size: lobby, Course round, Coopération round
+    // 21 · the host's tunnel died while the game goes on (the server's `is_running` is fine)
+    let host = Arc::new(FakeHost::ok(HostInfo {
+        port: 7878,
+        local_url: "ws://127.0.0.1:7878/ws".into(),
+        lan_urls: vec!["ws://192.168.1.24:7878/ws".into()],
+        tunnel_url: Some("wss://quiet-maple-harbor-7f3.trycloudflare.com/ws".into()),
+    }));
+    s.app.online().set_host(host.clone());
+    s.enter(true, lobby_config, five_players([0; 5]));
+    host.set_health(HostHealth::TunnelLost);
+    s.elapse(Duration::from_secs(2)); // the health check runs about once a second
+    s.app.online().pump();
+    s.headless.settle();
+    s.shoot("21-lobby-tunnel-lost.png")?;
+
     s.resize(800, 600);
     let small = &s;
     small.enter(true, lobby_config, eight_players());

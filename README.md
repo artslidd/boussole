@@ -109,6 +109,10 @@ From the start screen choose **Jouer en ligne**, type a **Pseudo** (1 to 16 char
   or per turn) and presses **Lancer la partie** (needs two connected players); everybody else sees
   them greyed out. A host who leaves is asked first, because it closes the game for everybody and
   shuts the embedded server (and the tunnel) down.
+* **Hosting trouble.** A fresh tunnel address is printed before it answers, so for the first seconds
+  the lobby says *Partagez l’adresse dans quelques secondes*. If the tunnel dies later the header
+  says *Tunnel perdu* and the Internet address is greyed out (players already on the local network
+  keep playing); if the embedded server itself stops, the host is sent back to the menu.
 * **Connection loss.** The header shows *Reconnexion…* with the seconds left; the app retries for
   up to 60 s with the session's resume token, and the server restores your place, your guesses and
   the clock. After that you are offered *Retour au menu*.

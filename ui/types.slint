@@ -72,8 +72,8 @@ export enum HostChoice { lan, tunnel }
 // Game mode of a room.
 export enum RoomMode { course, coop }
 
-// State of the connection strip in the header.
-export enum BannerKind { none, reconnecting, lost }
+// State of the strip in the header: connection trouble, or (for a host) a dead tunnel.
+export enum BannerKind { none, reconnecting, lost, tunnel-lost }
 
 // How a player stands in a Course round.
 export enum DotStatus { playing, solved, out }
@@ -136,4 +136,6 @@ export struct ShareAddressView {
     label: string,
     url: string,
     copied: bool,
+    // The tunnel behind this address died: the address no longer works.
+    lost: bool,
 }

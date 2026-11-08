@@ -439,6 +439,53 @@ fn a_host_app_that_exited_without_a_goodbye_is_given_up_on_as_soon_as_its_port_r
 }
 
 #[test]
+fn a_tunnel_whose_host_is_gone_is_given_up_on_like_a_refused_port() {
+    // Guests of a tunnel never see a refused port: Cloudflare answers the upgrade with 530
+    // (error 1033, tunnel not connected) or 521 (origin down) once the host's cloudflared is gone.
+    for status in [530u16, 521] {
+        let server = MockServer::start();
+        let mut config = fast(&server.url);
+        config.reconnect_window = Duration::from_secs(30);
+        let client = connect(config);
+        welcome_of(client.next());
+        server.answer_with_http_status(Some(status));
+        server.drop_connection();
+        assert!(matches!(
+            client.next(),
+            NetEvent::Reconnecting { attempt: 1 }
+        ));
+        let started = std::time::Instant::now();
+        assert_eq!(
+            client.next_skipping_reconnecting(),
+            NetEvent::Failed(NetError::ServerClosed),
+            "HTTP {status}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "HTTP {status}: at once"
+        );
+    }
+}
+
+#[test]
+fn a_gateway_hiccup_is_retried_because_the_game_may_well_still_be_there() {
+    // 502 / 504 can be a proxy restarting for a moment: keep trying, the slot is held.
+    let server = MockServer::start();
+    let client = connect(fast(&server.url));
+    welcome_of(client.next());
+    server.answer_with_http_status(Some(502));
+    server.drop_connection();
+    assert!(matches!(
+        client.next(),
+        NetEvent::Reconnecting { attempt: 1 }
+    ));
+    std::thread::sleep(Duration::from_millis(150));
+    server.answer_with_http_status(None);
+    let (_, _, resumed) = welcome_of(client.next_skipping_reconnecting());
+    assert!(resumed);
+}
+
+#[test]
 fn a_first_connection_to_a_closed_port_is_still_just_unreachable() {
     let port = {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

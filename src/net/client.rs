@@ -148,20 +148,18 @@ type Sink = Arc<dyn Fn(NetEvent) + Send + Sync>;
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-/// Why [`open`] failed. `refused` tells a port with nobody listening (the TCP connection was
-/// refused) from every other failure: while reconnecting, a refusal means the server process is
-/// gone and the game with it, whereas a network blip never refuses.
+/// Why [`open`] failed. `gone` tells "nobody is there any more" from every other failure: the TCP
+/// connection was refused (no listener), or a Cloudflare tunnel answered 530 / 521 (its origin,
+/// the host's `cloudflared`, is gone). While reconnecting that means the server process is gone
+/// and the game with it, whereas a network blip never says so.
 struct OpenError {
     error: NetError,
-    refused: bool,
+    gone: bool,
 }
 
 impl From<NetError> for OpenError {
     fn from(error: NetError) -> Self {
-        Self {
-            error,
-            refused: false,
-        }
+        Self { error, gone: false }
     }
 }
 
@@ -231,7 +229,7 @@ async fn run(config: NetConfig, mut commands: mpsc::UnboundedReceiver<Command>, 
                 }
                 // Nobody listens any more: the server process is gone (a host app that quit
                 // without its 1001 reaching us), and the game cannot come back.
-                Err(OpenError { refused: true, .. }) => {
+                Err(OpenError { gone: true, .. }) => {
                     sink(NetEvent::Failed(NetError::ServerClosed));
                     return;
                 }
@@ -300,7 +298,18 @@ async fn open(
             {
                 OpenError {
                     error: NetError::Unreachable(io.to_string()),
-                    refused: true,
+                    gone: true,
+                }
+            }
+            // Cloudflare in front of a host's tunnel: 530 (error 1033, tunnel not connected) and
+            // 521 (origin down) mean the host's side is gone. Other gateway errors (502, 504)
+            // can be a hiccup and are retried.
+            tokio_tungstenite::tungstenite::Error::Http(response)
+                if matches!(response.status().as_u16(), 521 | 530) =>
+            {
+                OpenError {
+                    error: NetError::Unreachable(format!("HTTP {}", response.status())),
+                    gone: true,
                 }
             }
             other => OpenError::from(NetError::Unreachable(other.to_string())),

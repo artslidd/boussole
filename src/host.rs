@@ -18,12 +18,37 @@ pub enum HostMode {
     Tunnel,
 }
 
+/// What kind of address a [`ShareAddress`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShareKind {
+    /// The Cloudflare tunnel's public `wss://` address.
+    Tunnel,
+    /// A `ws://<ip>:<port>/ws` address on the local network.
+    Lan,
+    /// The address of a remote standalone server (not hosted by this app).
+    Server,
+}
+
 /// An address the host shares with friends, with what it is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShareAddress {
-    /// "Internet" / "Réseau local".
+    /// "Internet" / "Réseau local" / "Serveur".
     pub label: String,
+    pub kind: ShareKind,
     pub url: String,
+}
+
+/// How the hosted server and its tunnel are doing, as reported by [`Host::health`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostHealth {
+    /// Everything that was started is still running.
+    Running,
+    /// The embedded server stopped on its own (`ServerHandle::is_running()` is false): the game
+    /// is over for everybody.
+    ServerStopped,
+    /// The server runs but the tunnel died (`Tunnel::is_running()` is false): the Internet
+    /// address no longer works, local players are fine.
+    TunnelLost,
 }
 
 /// A running hosted server.
@@ -46,12 +71,14 @@ impl HostInfo {
         if let Some(url) = &self.tunnel_url {
             out.push(ShareAddress {
                 label: "Internet".to_owned(),
+                kind: ShareKind::Tunnel,
                 url: url.clone(),
             });
         }
         for url in &self.lan_urls {
             out.push(ShareAddress {
                 label: "Réseau local".to_owned(),
+                kind: ShareKind::Lan,
                 url: url.clone(),
             });
         }
@@ -122,6 +149,13 @@ pub trait Host: Send + Sync {
     /// Shut the tunnel and the server down cleanly and release the port. Harmless when nothing
     /// runs.
     fn stop(&self);
+
+    /// Is what [`Host::start`] started still alive? The UI asks about once a second *from the UI
+    /// thread*, so this must be cheap and never block: the real host answers from
+    /// `ServerHandle::is_running()` and `Tunnel::is_running()`.
+    fn health(&self) -> HostHealth {
+        HostHealth::Running
+    }
 }
 
 /// The host of binaries that cannot host (yet): always refuses, honestly.
@@ -146,6 +180,7 @@ pub struct FakeHost {
     tunnel: Mutex<Result<HostInfo, HostError>>,
     started: Mutex<Vec<HostMode>>,
     stops: AtomicUsize,
+    health: Mutex<HostHealth>,
 }
 
 impl FakeHost {
@@ -156,6 +191,7 @@ impl FakeHost {
             tunnel: Mutex::new(Ok(info)),
             started: Mutex::new(Vec::new()),
             stops: AtomicUsize::new(0),
+            health: Mutex::new(HostHealth::Running),
         }
     }
 
@@ -166,6 +202,7 @@ impl FakeHost {
             tunnel: Mutex::new(Err(error)),
             started: Mutex::new(Vec::new()),
             stops: AtomicUsize::new(0),
+            health: Mutex::new(HostHealth::Running),
         }
     }
 
@@ -190,6 +227,11 @@ impl FakeHost {
     pub fn stops(&self) -> usize {
         self.stops.load(Ordering::SeqCst)
     }
+
+    /// What [`Host::health`] answers from now on (a crashed server, a dead tunnel).
+    pub fn set_health(&self, health: HostHealth) {
+        *self.health.lock().unwrap() = health;
+    }
 }
 
 impl Host for FakeHost {
@@ -204,11 +246,47 @@ impl Host for FakeHost {
     fn stop(&self) {
         self.stops.fetch_add(1, Ordering::SeqCst);
     }
+
+    fn health(&self) -> HostHealth {
+        *self.health.lock().unwrap()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_fake_host_reports_the_health_it_was_told_to() {
+        let host = FakeHost::ok(HostInfo {
+            port: 1,
+            local_url: "ws://127.0.0.1:1/ws".into(),
+            lan_urls: vec![],
+            tunnel_url: None,
+        });
+        assert_eq!(host.health(), HostHealth::Running);
+        host.set_health(HostHealth::TunnelLost);
+        assert_eq!(host.health(), HostHealth::TunnelLost);
+        host.set_health(HostHealth::ServerStopped);
+        assert_eq!(host.health(), HostHealth::ServerStopped);
+        assert_eq!(
+            UnavailableHost.health(),
+            HostHealth::Running,
+            "nothing runs, nothing died"
+        );
+    }
+
+    #[test]
+    fn share_addresses_say_what_kind_they_are() {
+        let info = HostInfo {
+            port: 7878,
+            local_url: "ws://127.0.0.1:7878/ws".into(),
+            lan_urls: vec!["ws://192.168.1.20:7878/ws".into()],
+            tunnel_url: Some("wss://abc.trycloudflare.com/ws".into()),
+        };
+        let kinds: Vec<_> = info.share_addresses().iter().map(|a| a.kind).collect();
+        assert_eq!(kinds, [ShareKind::Tunnel, ShareKind::Lan]);
+    }
 
     fn info() -> HostInfo {
         HostInfo {

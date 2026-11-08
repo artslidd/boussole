@@ -9,7 +9,7 @@ mod common;
 use boussole::app::{App, BannerKind, HostChoice, MenuHelp, Online, OnlineScreen, RoomMode};
 use boussole::clipboard::MemoryClipboard;
 use boussole::headless::Headless;
-use boussole::host::{FakeHost, HostError, HostInfo, HostMode};
+use boussole::host::{FakeHost, HostError, HostHealth, HostInfo, HostMode};
 use boussole::online::view::Screen;
 use boussole::online_ui::Stage;
 use boussole_protocol::{
@@ -719,6 +719,142 @@ fn the_binary_default_host_refuses_honestly() {
         ui.online().get_error().contains("pas disponible"),
         "{}",
         ui.online().get_error()
+    );
+}
+
+#[test]
+fn hosting_that_stops_unexpectedly_sends_the_host_back_to_the_menu_and_cleans_up() {
+    // `ServerHandle::is_running()` turned false (a crash, not a close we saw on the socket).
+    let (ui, _server, host) = hosted(HostChoice::Lan);
+    host.set_health(HostHealth::ServerStopped);
+    ui.wait("the menu", |ui| ui.screen() == OnlineScreen::Menu);
+    assert_eq!(
+        ui.online().get_error(),
+        "Le serveur de la partie s’est arrêté."
+    );
+    ui.wait("the host to be stopped", |_| host.stops() == 1);
+}
+
+#[test]
+fn a_lost_tunnel_is_shown_to_the_host_without_ending_the_game() {
+    let (ui, server, host) = hosted(HostChoice::Tunnel);
+    assert_eq!(ui.online().get_banner_kind(), BannerKind::None);
+    host.set_health(HostHealth::TunnelLost); // `Tunnel::is_running()` turned false
+    ui.wait("the banner", |ui| {
+        ui.online().get_banner_kind() == BannerKind::TunnelLost
+    });
+    assert_eq!(ui.online().get_banner_text(), "Tunnel perdu");
+    assert_eq!(
+        ui.screen(),
+        OnlineScreen::Lobby,
+        "the game goes on for the players already in"
+    );
+    assert!(
+        ui.online().get_share_hint().contains("Tunnel perdu"),
+        "{}",
+        ui.online().get_share_hint()
+    );
+    // the Internet address is marked out of service, the local one is not
+    let shared = ui.online().get_share_addresses();
+    let internet = shared.row_data(0).unwrap();
+    assert_eq!(internet.label, "Internet");
+    assert!(internet.lost);
+    assert!(!shared.row_data(1).unwrap().lost);
+    ui.element(
+        "Adresse à partager (Internet), tunnel perdu",
+        Some(AccessibleRole::TextInput),
+    );
+    // and the host can still run the game
+    server.send(lobby_msg(
+        course_config(),
+        vec![
+            player(1, "Alice", true, true),
+            player(2, "Bob", false, true),
+        ],
+    ));
+    ui.wait("two players", |ui| ui.online().get_can_start());
+    assert_eq!(
+        host.stops(),
+        0,
+        "nothing is shut down: LAN players are fine"
+    );
+}
+
+#[test]
+fn a_lost_tunnel_still_fits_the_minimum_window_with_eight_players() {
+    let ui = ui(800, 600);
+    let server = MockServer::start();
+    let host = Arc::new(FakeHost::ok(host_info(&server)));
+    ui.app.online().set_host(host.clone());
+    ui.open_menu();
+    ui.fill("Pseudo", "Alice");
+    ui.click(
+        "Internet : tunnel gratuit, sans compte",
+        Some(AccessibleRole::RadioButton),
+    );
+    ui.button("Héberger une partie");
+    let _ = ui.next_msg(&server);
+    server.send(lobby_msg(course_config(), eight_players()));
+    ui.wait("the lobby", |ui| ui.screen() == OnlineScreen::Lobby);
+    host.set_health(HostHealth::TunnelLost);
+    ui.wait("the banner", |ui| {
+        ui.online().get_banner_kind() == BannerKind::TunnelLost
+    });
+    let banner = ui.element("Tunnel perdu", Some(AccessibleRole::Text));
+    let quit = ui.element("Quitter", Some(AccessibleRole::Button));
+    let (b, q) = (banner.absolute_position(), quit.absolute_position());
+    assert!(
+        b.x + banner.size().width <= q.x + 0.5,
+        "banner {b:?} overlaps Quitter {q:?}"
+    );
+    let start = ui.element("Lancer la partie", Some(AccessibleRole::Button));
+    assert!(start.absolute_position().y + start.size().height <= 600.0);
+}
+
+#[test]
+fn a_fresh_tunnel_address_comes_with_a_few_seconds_of_patience() {
+    // The URL is printed by cloudflared before it answers: say so, then go back to the plain hint.
+    let ui = ui(1000, 760);
+    let server = MockServer::start();
+    ui.app
+        .online()
+        .set_host(Arc::new(FakeHost::ok(host_info(&server))));
+    let t0 = Instant::now();
+    let offset = Rc::new(std::cell::Cell::new(Duration::ZERO));
+    let o = offset.clone();
+    ui.app.online().set_clock(Rc::new(move || t0 + o.get()));
+    ui.open_menu();
+    ui.fill("Pseudo", "Alice");
+    ui.click(
+        "Internet : tunnel gratuit, sans compte",
+        Some(AccessibleRole::RadioButton),
+    );
+    ui.button("Héberger une partie");
+    let _ = ui.next_msg(&server);
+    server.send(lobby_msg(
+        course_config(),
+        vec![player(1, "Alice", true, true)],
+    ));
+    ui.wait("the lobby", |ui| ui.screen() == OnlineScreen::Lobby);
+    assert_eq!(
+        ui.online().get_share_hint(),
+        "Partagez l’adresse dans quelques secondes."
+    );
+    offset.set(Duration::from_secs(20));
+    ui.app.online().pump();
+    assert_eq!(
+        ui.online().get_share_hint(),
+        "Partagez l’adresse et le code avec vos amis."
+    );
+}
+
+#[test]
+fn a_local_network_game_needs_no_patience() {
+    let (ui, _server, _host) = hosted(HostChoice::Lan);
+    // the fake's LAN answer carries a tunnel URL too; only a tunnel *choice* warms up
+    assert_eq!(
+        ui.online().get_share_hint(),
+        "Partagez l’adresse et le code avec vos amis."
     );
 }
 
