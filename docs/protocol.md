@@ -616,13 +616,21 @@ are listed with their defaults in `docs/deploy.md`):
 |---|---|
 | Frame over 4096 bytes | `bad_message` then close with WebSocket code 1008 (up to 16 KiB is read to answer; beyond that the socket is aborted) |
 | Binary frame | `bad_message`, connection kept |
-| Message rate | token bucket, 10 messages/s with bursts of 20; refused messages get `rate_limited` and are not given to the engine; sustained flooding closes the socket (1008) |
+| Message rate | token bucket, 10 frames/s with bursts of 20 (every frame counts, WebSocket pongs included); refused messages get `rate_limited` and are not given to the engine; sustained flooding closes the socket (1008) |
 | No `hello` | the socket is closed (1008) 10 s after connecting |
-| Liveness | WebSocket ping every 20 s; a socket silent for 60 s (pongs count) is dropped and reported to the engine as a disconnection (60 s resume window) |
+| No room | a connection that has not received a `room_snapshot` 60 s after its `welcome` is closed (1008), so idle clients cannot occupy the connection cap; connect when the player is ready to host or join |
+| Room codes | more than 5 `room_not_found` answers within a minute on one connection closes it (1008) |
+| Liveness | WebSocket ping every 20 s; a socket that sends no frame at all (a pong is one) for 60 s is dropped at that moment and reported to the engine as a disconnection (60 s resume window) |
 | Slow reader | 64 queued messages per connection; beyond that the connection is dropped (same resume window) |
-| Connection cap | an upgrade beyond `max_connections` is refused with HTTP 503 |
+| Connection caps | an upgrade beyond `max_connections` is refused with HTTP 503, beyond `max_connections_per_ip` for one client address with HTTP 429 |
 | Room cap | `create_room` while `max_rooms` rooms exist is answered `invalid_state` (the protocol has no dedicated code; joining existing rooms still works) |
-| Shutdown | clients receive a WebSocket close with code 1001 (going away); no protocol message exists for it, so a client seeing 1001 should treat the server as gone |
+| Shutdown | clients receive a WebSocket close with code 1001 (going away), sent before the server finishes stopping; no protocol message exists for it, so a client seeing 1001 (or a bare end of stream from a host that has quit) should treat the server as gone |
+
+**Ordering of transport errors.** `rate_limited` and the `bad_message` answers to binary or
+oversized frames are written by the transport directly, **not** through the queue of engine
+replies, so one of them can arrive before an engine reply to an earlier request that is still
+in flight. The protocol has no request ids: a client must not pair "the next `error`" with "my
+last request".
 
 ## 15. Notes for the client (05)
 
@@ -637,6 +645,14 @@ are listed with their defaults in `docs/deploy.md`):
 - Display times from `remaining_ms` against your own clock; never compare with server time.
 - Hint distances exist only when `distance_km` is present (`facile`). Arrows must not encode
   distance in their length (same rule as solo).
+- **Connect when the player is ready.** The server drops a connection that is in no room 60 s
+  after `welcome`, and caps connections per client address (HTTP 429 at the upgrade, HTTP 503
+  when the server is full): open the socket when the player hosts or joins, send `hello` and
+  then `create_room` / `join_room` straight away, and show a refused upgrade as "server full"
+  or "too many connections from your address".
+- `error` messages are not tied to a request: the transport's own errors (`rate_limited`, a
+  `bad_message` for a binary frame) may overtake queued engine replies (§14). React to the
+  code, not to its position.
 - Client frames are tiny (a `hello` is 100–150 bytes, a `create_room` about 140); the
   4096-byte limit is not a concern for legitimate clients.
 - Pre-validate nicknames with `boussole_protocol::normalize_nickname`, room codes with

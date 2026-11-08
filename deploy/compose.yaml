@@ -12,18 +12,21 @@
 
 name: boussole
 
+x-server-env: &server-env
+  BOUSSOLE_BIND: 0.0.0.0:7878
+  BOUSSOLE_MAX_CONNECTIONS: ${BOUSSOLE_MAX_CONNECTIONS:-2000}
+  BOUSSOLE_MAX_ROOMS: ${BOUSSOLE_MAX_ROOMS:-500}
+  BOUSSOLE_MAX_CONNECTIONS_PER_IP: ${BOUSSOLE_MAX_CONNECTIONS_PER_IP:-20}
+  RUST_LOG: ${RUST_LOG:-info}
+  BOUSSOLE_LOG_FORMAT: ${BOUSSOLE_LOG_FORMAT:-text}
+
 x-server: &server
   build:
     context: ..
     dockerfile: Dockerfile
   image: boussole-server:local
   restart: unless-stopped
-  environment:
-    BOUSSOLE_BIND: 0.0.0.0:7878
-    BOUSSOLE_MAX_CONNECTIONS: ${BOUSSOLE_MAX_CONNECTIONS:-2000}
-    BOUSSOLE_MAX_ROOMS: ${BOUSSOLE_MAX_ROOMS:-500}
-    RUST_LOG: ${RUST_LOG:-info}
-    BOUSSOLE_LOG_FORMAT: ${BOUSSOLE_LOG_FORMAT:-text}
+  environment: *server-env
   healthcheck:
     test: ["CMD", "/usr/local/bin/boussole-server", "--healthcheck"]
     interval: 30s
@@ -34,6 +37,15 @@ x-server: &server
   read_only: true
   cap_drop: [ALL]
   security_opt: ["no-new-privileges:true"]
+  # Bounded resources: one runaway or attacked server must not take the host with it.
+  pids_limit: 256
+  mem_limit: 512m
+  # Every connection is logged; without rotation a reconnect loop could fill the disk.
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
 
 services:
   # `tls` profile: reachable only through Caddy, no published port.
@@ -41,6 +53,12 @@ services:
     <<: *server
     profiles: [tls]
     expose: ["7878"]
+    environment:
+      <<: *server-env
+      # Every peer is Caddy, so believe the client address it reports in X-Forwarded-For
+      # (for the per-address connection limit). Only safe because nothing else can reach
+      # this container: never set it on a server that is published directly.
+      BOUSSOLE_TRUST_PROXY_HEADERS: "true"
 
   # `lan` profile: the same server, published directly (BOUSSOLE_PORT changes the host port).
   server-lan:
@@ -53,6 +71,17 @@ services:
     image: caddy:2
     profiles: [tls]
     restart: unless-stopped
+    # Caddy only has to bind ports 80 and 443.
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       server:
         condition: service_healthy
