@@ -18,6 +18,8 @@ use tokio::time::Instant;
 
 /// How long `cloudflared` gets to print its URL.
 const START_TIMEOUT: Duration = Duration::from_secs(20);
+/// After `cloudflared` closes its output, how long it may take to actually exit.
+const EXIT_GRACE: Duration = Duration::from_secs(2);
 /// Lines of cloudflared output kept to explain a failed start.
 const TAIL_LINES: usize = 6;
 
@@ -41,16 +43,43 @@ struct EmptyConfig(PathBuf);
 impl EmptyConfig {
     fn create() -> std::io::Result<Self> {
         static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "boussole-cloudflared-{}-{n}.yml",
-            std::process::id()
-        ));
-        std::fs::write(
-            &path,
-            "# intentionally empty: a quick tunnel needs no configuration\n",
-        )?;
-        Ok(Self(path))
+        Self::create_with(|| {
+            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            std::env::temp_dir().join(format!(
+                "boussole-cloudflared-{}-{n}.yml",
+                std::process::id()
+            ))
+        })
+    }
+
+    /// Create the file under the first name `next_path` offers that is free.
+    fn create_with(mut next_path: impl FnMut() -> PathBuf) -> std::io::Result<Self> {
+        use std::io::Write;
+        // `create_new` (O_EXCL) never follows a symlink or overwrites a file someone else put
+        // at a predictable name in a shared temp directory; mode 0600 on Unix.
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let mut attempts = 0;
+        loop {
+            let path = next_path();
+            match options.open(&path) {
+                Ok(mut file) => {
+                    // A guard from here on: the file must not outlive a failed write.
+                    let config = Self(path);
+                    file.write_all(
+                        b"# intentionally empty: a quick tunnel needs no configuration\n",
+                    )?;
+                    return Ok(config);
+                }
+                // A leftover of a crashed run, or someone squatting the name: try the next.
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempts < 8 => {
+                    attempts += 1;
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 }
 
@@ -64,6 +93,17 @@ impl Tunnel {
     /// `wss://<words>.trycloudflare.com/ws`, the address to share with friends.
     pub fn public_ws_url(&self) -> &str {
         &self.ws_url
+    }
+
+    /// `false` once `cloudflared` has exited (crash, lost network, killed): the address from
+    /// [`Tunnel::public_ws_url`] is dead from then on and nothing restarts it.
+    pub fn is_running(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Resolves when `cloudflared` has exited (returns at once if it already has).
+    pub async fn exited(&mut self) {
+        let _ = self.child.wait().await;
     }
 
     /// Stop `cloudflared` and wait for it to exit.
@@ -159,13 +199,22 @@ pub(crate) async fn launch(
                     }
                     tail.push(line);
                 }
-                // Both pipes closed: the process is exiting.
+                // Both pipes closed: the process is exiting, or has closed its output and
+                // carries on; do not wait for it forever.
                 None => {
-                    let status = child.wait().await.map_or_else(|e| e.to_string(), |s| s.to_string());
-                    return Err(TunnelError::StartFailed(format!(
-                        "cloudflared exited ({status}) before printing a URL; last output: {}",
-                        tail.join(" | ")
-                    )));
+                    let output = tail.join(" | ");
+                    return Err(TunnelError::StartFailed(
+                        match tokio::time::timeout(EXIT_GRACE, child.wait()).await {
+                            Ok(status) => format!(
+                                "cloudflared exited ({}) before printing a URL; last output: {output}",
+                                status.map_or_else(|e| e.to_string(), |s| s.to_string())
+                            ),
+                            Err(_) => {
+                                let _ = child.kill().await;
+                                format!("cloudflared closed its output without printing a URL; last output: {output}")
+                            }
+                        },
+                    ));
                 }
             },
             () = tokio::time::sleep_until(deadline) => {
@@ -377,6 +426,11 @@ mod tests {
                 std::path::Path::new(&config).is_file(),
                 "the empty config exists while the tunnel runs"
             );
+            assert_eq!(
+                std::fs::metadata(&config).unwrap().permissions().mode() & 0o777,
+                0o600,
+                "the temporary config is private"
+            );
             let pid = fake.pid();
             assert!(alive(pid));
             tunnel.stop().await;
@@ -401,6 +455,75 @@ mod tests {
             assert!(alive(pid));
             drop(tunnel);
             assert_dies(pid).await;
+        }
+
+        #[tokio::test]
+        async fn is_running_and_exited_follow_the_child() {
+            let _lock = SPAWN.lock().await;
+            // Prints its URL, lives for a moment, then exits on its own (a crash, say).
+            let fake = Fake::new(
+                "short-lived",
+                "echo https://short-lived.trycloudflare.com\nsleep 1",
+            );
+            let mut tunnel = launch(fake.program().as_os_str(), None, 1, Duration::from_secs(10))
+                .await
+                .expect("tunnel starts");
+            assert!(tunnel.is_running());
+            tokio::time::timeout(Duration::from_secs(10), tunnel.exited())
+                .await
+                .expect("exited() resolves when the child exits");
+            assert!(!tunnel.is_running());
+            // exited() on a child that is already gone returns at once.
+            tunnel.exited().await;
+        }
+
+        #[tokio::test]
+        async fn closing_the_output_without_exiting_is_not_waited_for_forever() {
+            let _lock = SPAWN.lock().await;
+            let fake = Fake::new("closed-pipes", "exec >&- 2>&-\nexec sleep 300");
+            let started = std::time::Instant::now();
+            let err = launch(fake.program().as_os_str(), None, 1, Duration::from_secs(30))
+                .await
+                .unwrap_err();
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "{:?}",
+                started.elapsed()
+            );
+            assert!(
+                matches!(&err, TunnelError::StartFailed(why) if why.contains("closed its output")),
+                "{err:?}"
+            );
+            assert_dies(fake.pid()).await;
+        }
+
+        #[test]
+        fn the_temporary_config_never_overwrites_an_existing_file() {
+            let dir = std::env::temp_dir().join(format!("boussole-excl-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let squatted = dir.join("squatted.yml");
+            let fresh = dir.join("fresh.yml");
+            std::fs::write(&squatted, "precious").unwrap();
+
+            let first = std::sync::atomic::AtomicBool::new(true);
+            let config = EmptyConfig::create_with(|| {
+                if first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    squatted.clone()
+                } else {
+                    fresh.clone()
+                }
+            })
+            .expect("the next free name is used");
+
+            assert_eq!(config.0, fresh);
+            assert_eq!(std::fs::read_to_string(&squatted).unwrap(), "precious");
+            assert_eq!(
+                std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            drop(config);
+            assert!(!fresh.exists(), "dropped with the Tunnel");
+            std::fs::remove_dir_all(&dir).unwrap();
         }
 
         #[tokio::test]

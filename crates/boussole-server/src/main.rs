@@ -1,8 +1,9 @@
 //! Standalone Boussole server.
 //!
 //! Configuration (environment): `BOUSSOLE_BIND` (default `0.0.0.0:7878`),
-//! `BOUSSOLE_MAX_CONNECTIONS` (2000), `BOUSSOLE_MAX_ROOMS` (500), `RUST_LOG` (default `info`),
-//! `BOUSSOLE_LOG_FORMAT=json` for JSON logs. Flags: `--tunnel`, `--healthcheck`, `--help`.
+//! `BOUSSOLE_MAX_CONNECTIONS` (2000), `BOUSSOLE_MAX_ROOMS` (500),
+//! `BOUSSOLE_MAX_CONNECTIONS_PER_IP` (20), `BOUSSOLE_TRUST_PROXY_HEADERS` (false), `RUST_LOG`
+//! (default `info`), `BOUSSOLE_LOG_FORMAT=json` for JSON logs. Flags: `--tunnel`, `--healthcheck`, `--help`.
 
 use boussole_server::{ServerConfig, lan_ws_urls, start, tunnel};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -25,6 +26,12 @@ ENVIRONMENT
   BOUSSOLE_BIND              listen address              (default 0.0.0.0:7878)
   BOUSSOLE_MAX_CONNECTIONS   simultaneous connections    (default 2000)
   BOUSSOLE_MAX_ROOMS         simultaneous rooms           (default 500)
+  BOUSSOLE_MAX_CONNECTIONS_PER_IP
+                             connections per client address (default 20)
+  BOUSSOLE_TRUST_PROXY_HEADERS
+                             believe Cf-Connecting-Ip / X-Forwarded-For from any peer, only
+                             if the server is reachable through your proxy alone
+                             (default false: trusted from loopback peers only)
   RUST_LOG                   log filter                   (default info)
   BOUSSOLE_LOG_FORMAT        `json` for JSON logs         (default human readable)
 ";
@@ -74,7 +81,7 @@ async fn main() -> ExitCode {
         println!("  LAN:    {url}");
     }
 
-    let tunnel = if tunnel_flag {
+    let mut tunnel = if tunnel_flag {
         match tunnel::start_cloudflared(port).await {
             Ok(t) => {
                 println!(
@@ -93,13 +100,33 @@ async fn main() -> ExitCode {
         None
     };
 
-    wait_for_stop_signal().await;
-    tracing::info!("stop signal received, shutting down");
+    // Run until told to stop. If the engine or the listener dies on its own the process must
+    // not keep looking alive (a supervisor restarts a process that exits), so that is a
+    // failure exit. A tunnel that dies only loses the public address: say so, keep serving.
+    let mut tunnel_up = tunnel.is_some();
+    let exit = loop {
+        tokio::select! {
+            () = wait_for_stop_signal() => {
+                tracing::info!("stop signal received, shutting down");
+                break ExitCode::SUCCESS;
+            }
+            () = server.closed() => {
+                tracing::error!("the server stopped on its own (a bug): exiting");
+                eprintln!("the server stopped unexpectedly; exiting so that a supervisor can restart it");
+                break ExitCode::FAILURE;
+            }
+            () = async { if let Some(t) = tunnel.as_mut() { t.exited().await } }, if tunnel_up => {
+                tunnel_up = false;
+                tracing::error!("cloudflared exited: the public address no longer works");
+                eprintln!("the tunnel stopped: the public address above no longer works (LAN and local play continue; restart to get a new address)");
+            }
+        }
+    };
     if let Some(t) = tunnel {
         t.stop().await;
     }
     server.shutdown().await;
-    ExitCode::SUCCESS
+    exit
 }
 
 fn init_logging() {

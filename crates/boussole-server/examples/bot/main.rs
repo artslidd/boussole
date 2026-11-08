@@ -35,6 +35,8 @@ usage: bot --url <ws://host:port/ws> (--create | --room <CODE>) [options]
   --rounds <n>         1-10 (create only, default 2)
   --players <n>        start when n players are in the room (create only, default 2)
   --think-ms <n>       pause before each guess (default 300)
+  --wait-s <n>         give up if the match has not started after n seconds (default 120);
+                       with --create this is how long to wait for --players players
   --seed <n>           random seed (default: from the nickname)";
 
 struct Args {
@@ -47,6 +49,7 @@ struct Args {
     rounds: u32,
     players: usize,
     think: Duration,
+    wait: Duration,
     seed: u64,
 }
 
@@ -61,6 +64,7 @@ fn parse_args() -> Result<Args, String> {
         rounds: 2,
         players: 2,
         think: Duration::from_millis(300),
+        wait: Duration::from_secs(120),
         seed: 0,
     };
     let mut seed = None;
@@ -101,6 +105,13 @@ fn parse_args() -> Result<Args, String> {
                     value("--think-ms")?
                         .parse()
                         .map_err(|e| format!("--think-ms: {e}"))?,
+                )
+            }
+            "--wait-s" => {
+                a.wait = Duration::from_secs(
+                    value("--wait-s")?
+                        .parse()
+                        .map_err(|e| format!("--wait-s: {e}"))?,
                 )
             }
             "--seed" => {
@@ -146,16 +157,35 @@ async fn main() -> ExitCode {
     }
 }
 
+type Ws =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// How long to back off when the server says `rate_limited`.
+const RATE_LIMIT_BACKOFF: Duration = Duration::from_millis(600);
+
+async fn send(ws: &mut Ws, msg: ClientMsg) -> Result<(), String> {
+    ws.send(Message::text(encode_client(&msg)))
+        .await
+        .map_err(|e| format!("send: {e}"))
+}
+
+/// Send the next guess and remember it until it is answered, so that it can be sent again if
+/// the server was too busy to take it (`rate_limited`).
+async fn guess(
+    ws: &mut Ws,
+    strat: &mut Strategy,
+    pending: &mut Option<&'static str>,
+) -> Result<(), String> {
+    let city = strat.next_guess();
+    *pending = Some(city);
+    send(ws, ClientMsg::Guess { city: city.into() }).await
+}
+
 async fn play(args: Args) -> Result<(), String> {
     let tag = format!("[{}]", args.nickname);
     let (mut ws, _) = connect_async(&args.url)
         .await
         .map_err(|e| format!("cannot connect to {}: {e}", args.url))?;
-    let send = async |ws: &mut tokio_tungstenite::WebSocketStream<_>, msg: ClientMsg| {
-        ws.send(Message::text(encode_client(&msg)))
-            .await
-            .map_err(|e| format!("send: {e}"))
-    };
     send(&mut ws, ClientMsg::hello(args.nickname.clone(), None)).await?;
 
     let mut me = 0;
@@ -165,8 +195,22 @@ async fn play(args: Args) -> Result<(), String> {
     // Course or Coopération is the room's setting: learned from the first round_started.
     let mut course = args.mode == Mode::Course;
     let think = args.think;
+    let mut pending: Option<&'static str> = None;
+    let mut round_seen = false;
+    let start_deadline = tokio::time::Instant::now() + args.wait;
 
-    while let Some(frame) = ws.next().await {
+    loop {
+        let frame = tokio::select! {
+            frame = ws.next() => frame,
+            () = tokio::time::sleep_until(start_deadline), if !round_seen => {
+                return Err(format!(
+                    "the match did not start within {} s{}",
+                    args.wait.as_secs(),
+                    if args.create { format!(" (waiting for {} players)", args.players) } else { String::new() }
+                ));
+            }
+        };
+        let Some(frame) = frame else { break };
         let text = match frame.map_err(|e| format!("read: {e}"))? {
             Message::Text(t) => t,
             Message::Close(f) => return Err(format!("server closed the connection: {f:?}")),
@@ -221,6 +265,8 @@ async fn play(args: Args) -> Result<(), String> {
                     r.hints.len()
                 );
                 strat.reset();
+                round_seen = true;
+                pending = None;
                 course = matches!(r.timer, Timer::Round { .. });
                 let my_turn = match r.timer {
                     Timer::Round { .. } => true,
@@ -228,13 +274,7 @@ async fn play(args: Args) -> Result<(), String> {
                 };
                 if my_turn {
                     tokio::time::sleep(think).await;
-                    send(
-                        &mut ws,
-                        ClientMsg::Guess {
-                            city: strat.next_guess().into(),
-                        },
-                    )
-                    .await?;
+                    guess(&mut ws, &mut strat, &mut pending).await?;
                 }
             }
             ServerMsg::GuessResult(g) => {
@@ -247,29 +287,20 @@ async fn play(args: Args) -> Result<(), String> {
                     if g.correct { " (correct)" } else { "" }
                 );
                 strat.observe(&g);
+                if g.by == me {
+                    pending = None;
+                }
                 if g.by == me && course {
                     let done = g.correct || g.tries_used >= MAX_TRIES;
                     if !done {
                         tokio::time::sleep(think).await;
-                        send(
-                            &mut ws,
-                            ClientMsg::Guess {
-                                city: strat.next_guess().into(),
-                            },
-                        )
-                        .await?;
+                        guess(&mut ws, &mut strat, &mut pending).await?;
                     }
                 }
             }
             ServerMsg::TurnChanged { player_id, .. } if player_id == me => {
                 tokio::time::sleep(think).await;
-                send(
-                    &mut ws,
-                    ClientMsg::Guess {
-                        city: strat.next_guess().into(),
-                    },
-                )
-                .await?;
+                guess(&mut ws, &mut strat, &mut pending).await?;
             }
             ServerMsg::RoundEnded(e) => {
                 let mine = e.results.iter().find(|r| r.player_id == me);
@@ -294,12 +325,26 @@ async fn play(args: Args) -> Result<(), String> {
                 let _ = ws.close(None).await;
                 return Ok(());
             }
+            // Too many messages: not fatal. Back off, then send the refused guess again (the
+            // server never saw it). A client that keeps flooding is closed by the server, which
+            // ends the bot with an error below.
+            ServerMsg::Error {
+                code: ErrorCode::RateLimited,
+                message,
+            } => {
+                eprintln!("{tag} slowed down by the server ({message}); backing off");
+                tokio::time::sleep(RATE_LIMIT_BACKOFF).await;
+                if let Some(city) = pending {
+                    send(&mut ws, ClientMsg::Guess { city: city.into() }).await?;
+                }
+            }
             ServerMsg::Error { code, message } => match code {
                 // Races with timers or teammates are part of the game.
                 ErrorCode::NotYourTurn
                 | ErrorCode::AlreadyGuessed
                 | ErrorCode::RoundOver
                 | ErrorCode::UnknownCity => {
+                    pending = None;
                     eprintln!("{tag} refused ({code:?}): {message}");
                 }
                 _ => return Err(format!("server error {code:?}: {message}")),
