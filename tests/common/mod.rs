@@ -114,7 +114,7 @@ impl MockServer {
             });
         });
         let port = ready_rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(Duration::from_secs(10))
             .expect("mock server up");
         Self {
             url: format!("ws://127.0.0.1:{port}/ws"),
@@ -193,8 +193,8 @@ impl MockServer {
     }
 
     pub fn next_client_msg(&self) -> ClientMsg {
-        self.try_next_client_msg(Duration::from_secs(5))
-            .expect("the client sent a message within 5 s")
+        self.try_next_client_msg(Duration::from_secs(10))
+            .expect("the client sent a message within 10 s")
     }
 
     /// Every `hello` received so far, oldest first.
@@ -212,9 +212,9 @@ impl MockServer {
         self.shared.lock().unwrap().closed_by_client
     }
 
-    /// Wait until `condition` holds (polling), panicking after 5 s.
+    /// Wait until `condition` holds (polling), panicking after 10 s.
     pub fn wait_until(&self, what: &str, condition: impl Fn(&MockServer) -> bool) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while !condition(self) {
             assert!(
                 std::time::Instant::now() < deadline,

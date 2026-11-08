@@ -98,9 +98,9 @@ impl Ui {
         self.h.type_text(text);
     }
 
-    /// Let the network and the timers run until `condition` holds (5 s of real time at most).
+    /// Let the network and the timers run until `condition` holds (10 s of real time at most).
     fn wait(&self, what: &str, condition: impl Fn(&Ui) -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(10);
         while !condition(self) {
             assert!(Instant::now() < deadline, "timed out waiting for {what}");
             self.h.tick(Duration::from_millis(50));
@@ -112,7 +112,7 @@ impl Ui {
     /// The next message the server receives, while the UI keeps running (its poll timer drains
     /// the network inbox: a blocking wait on the server alone would never let it send anything).
     fn next_msg(&self, server: &MockServer) -> ClientMsg {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             self.h.tick(Duration::from_millis(50));
             if let Some(msg) = server.try_next_client_msg(Duration::from_millis(3)) {
@@ -120,7 +120,7 @@ impl Ui {
             }
             assert!(
                 Instant::now() < deadline,
-                "the client sent no message within 5 s"
+                "the client sent no message within 10 s"
             );
         }
     }

@@ -523,9 +523,9 @@ fn main() -> Result<()> {
         ranking: vec![
             rank(1, "Alice", 2310, 1, 4),
             rank(3, "Camille", 2310, 1, 4),
-            rank(2, "Bob", 1450, 3, 2),
-            rank(4, "Dominique", 900, 4, 1),
-            rank(5, "Émilie", 120, 5, 0),
+            rank(2, "Bob", 1180, 3, 2),
+            rank(4, "Dominique", 540, 4, 1),
+            rank(5, "Émilie", 0, 5, 0),
         ],
     }));
     s.send(lobby(course, players.clone()));
@@ -593,7 +593,11 @@ fn main() -> Result<()> {
         ],
         eight
             .iter()
-            .map(|p| progress(p.id, (p.id % 4) as u8, p.id == 3, p.id == 8))
+            .map(|p| {
+                // Hugo (8) is out of tries: all six used; Camille (3) found it in three
+                let tries = if p.id == 8 { 6 } else { (p.id % 4) as u8 };
+                progress(p.id, tries, p.id == 3, p.id == 8)
+            })
             .collect(),
     );
     small.shoot("18-course-8-players-800x600.png")?;

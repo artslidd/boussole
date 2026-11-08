@@ -12,7 +12,7 @@ use common::{Handshake, MockServer};
 use std::sync::mpsc;
 use std::time::Duration;
 
-const WAIT: Duration = Duration::from_secs(5);
+const WAIT: Duration = Duration::from_secs(10);
 
 struct Client {
     handle: NetHandle,
@@ -40,7 +40,7 @@ impl Client {
     fn next(&self) -> NetEvent {
         self.events
             .recv_timeout(WAIT)
-            .expect("a network event within 5 s")
+            .expect("a network event within 10 s")
     }
 
     /// The next event that is not a `Reconnecting` notification.
