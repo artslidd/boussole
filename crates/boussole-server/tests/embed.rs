@@ -36,11 +36,13 @@ async fn host_mode_server_plays_a_match_in_the_callers_runtime_and_releases_its_
     );
     assert_eq!(a.match_ended.ranking.len(), 2);
 
-    // Shutdown completes, tells clients goodbye (1001) and frees the port.
-    let (closed_host, closed_guest, ()) =
-        tokio::join!(host.closed(), guest.closed(), server.shutdown());
-    assert_eq!(closed_host, Some(1001));
-    assert_eq!(closed_guest, Some(1001));
+    // `shutdown()` returns only once every client has been told goodbye (close code 1001),
+    // even though nobody reads during it: the goodbyes are already in the sockets. A host app
+    // that exits right after `shutdown().await` therefore cannot lose them.
+    assert!(server.is_running());
+    server.shutdown().await;
+    assert_eq!(host.closed().await, Some(1001));
+    assert_eq!(guest.closed().await, Some(1001));
     tokio::time::timeout(Duration::from_secs(5), tokio::net::TcpListener::bind(addr))
         .await
         .expect("bind timeout")

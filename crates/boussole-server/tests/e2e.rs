@@ -6,6 +6,7 @@ mod net;
 use boussole_protocol::*;
 use net::*;
 use std::time::Duration;
+use tokio::net::TcpStream;
 use tokio::time::{sleep, timeout};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -321,8 +322,8 @@ async fn coop_match_with_three_clients_and_two_rounds() {
 
 #[tokio::test]
 async fn coop_turn_timeout_passes_the_turn_without_using_a_try() {
-    // 15 s turn = 150 ms real time.
-    let server = server(fast(100)).await;
+    // 15 s turn = 300 ms real time.
+    let server = server(fast(50)).await;
     let addr = server.local_addr();
     let mut host = TestClient::connect(addr, "Hote").await;
     let mut guest = TestClient::connect(addr, "Invite").await;
@@ -650,14 +651,14 @@ async fn room_cap_refuses_create_room_but_not_joining() {
 
 #[tokio::test]
 async fn sockets_that_never_say_hello_are_closed() {
-    let server = server(|c| c.handshake_timeout = Duration::from_millis(300)).await;
+    let server = server(|c| c.handshake_timeout = Duration::from_millis(500)).await;
     let addr = server.local_addr();
     let mut silent = TestClient::raw(addr).await;
     assert_eq!(silent.closed().await, Some(CLOSE_POLICY));
 
     // Saying hello in time disarms the timeout.
     let mut chatty = TestClient::connect(addr, "Quick").await;
-    sleep(Duration::from_millis(600)).await;
+    sleep(Duration::from_millis(1000)).await;
     chatty.send(&ClientMsg::Ping).await;
     assert_eq!(chatty.recv().await, ServerMsg::Pong);
     server.shutdown().await;
@@ -666,8 +667,8 @@ async fn sockets_that_never_say_hello_are_closed() {
 #[tokio::test]
 async fn websocket_pings_keep_live_clients_and_idle_ones_are_dropped_but_resumable() {
     let server = server(|c| {
-        c.ping_interval = Duration::from_millis(100);
-        c.idle_timeout = Duration::from_millis(500);
+        c.ping_interval = Duration::from_millis(200);
+        c.idle_timeout = Duration::from_millis(1000);
     })
     .await;
     let addr = server.local_addr();
@@ -695,8 +696,8 @@ async fn websocket_pings_keep_live_clients_and_idle_ones_are_dropped_but_resumab
             .iter()
             .any(|p| p.nickname == "Live" && p.connected)
     );
-    // Silence of 2 s is 4 idle timeouts: `live` is still there because it answers pings.
-    assert!(timeout(Duration::from_secs(2), live.next()).await.is_err());
+    // Silence of 3 s is 3 idle timeouts: `live` is still there because it answers pings.
+    assert!(timeout(Duration::from_secs(3), live.next()).await.is_err());
     live.send(&ClientMsg::Ping).await;
     assert_eq!(live.recv().await, ServerMsg::Pong);
 
@@ -784,6 +785,7 @@ async fn hostile_input_for_a_few_seconds_never_takes_the_server_down() {
     let server = server(|c| {
         c.msg_rate_per_s = 1_000_000;
         c.msg_burst = 1_000_000;
+        c.max_connections_per_ip = 1_000;
         c.time_scale = 50;
     })
     .await;
@@ -850,5 +852,273 @@ async fn hostile_input_for_a_few_seconds_never_takes_the_server_down() {
         SERVER_PANICS.load(std::sync::atomic::Ordering::SeqCst),
         0,
         "no panic inside the server under hostile input"
+    );
+}
+
+// ---- rework 1: abuse limits ---------------------------------------------------------------
+
+#[tokio::test]
+async fn connections_per_address_are_capped_and_tunnel_headers_are_honoured_from_loopback() {
+    let server = server(|c| c.max_connections_per_ip = 2).await;
+    let addr = server.local_addr();
+    let refused = |r: Result<TestClient, tokio_tungstenite::tungstenite::Error>| match r {
+        Ok(_) => panic!("expected the upgrade to be refused"),
+        Err(e) => e.to_string(),
+    };
+
+    // Everyone connecting straight to the loopback port is one address: two are admitted.
+    let a = TestClient::raw(addr).await;
+    let _b = TestClient::raw(addr).await;
+    let why = refused(TestClient::raw_with_headers(addr, &[]).await);
+    assert!(why.contains("429"), "{why}");
+
+    // A tunnel or proxy on loopback names the real visitor: each address has its own quota.
+    let cf = |ip: &'static str| [("cf-connecting-ip", ip)];
+    let _c1 = TestClient::raw_with_headers(addr, &cf("198.51.100.1"))
+        .await
+        .unwrap();
+    let _c2 = TestClient::raw_with_headers(addr, &cf("198.51.100.1"))
+        .await
+        .unwrap();
+    let why = refused(TestClient::raw_with_headers(addr, &cf("198.51.100.1")).await);
+    assert!(why.contains("429"), "{why}");
+    let _other = TestClient::raw_with_headers(addr, &cf("198.51.100.2"))
+        .await
+        .unwrap();
+    // X-Forwarded-For: the last entry counts, a spoofed first one does not buy a new quota.
+    let xff = [("x-forwarded-for", "9.9.9.9, 198.51.100.1")];
+    let why = refused(TestClient::raw_with_headers(addr, &xff).await);
+    assert!(why.contains("429"), "{why}");
+
+    // A slot freed by a closing connection is usable again.
+    a.vanish();
+    let mut admitted = false;
+    for _ in 0..50 {
+        if TestClient::raw_with_headers(addr, &[]).await.is_ok() {
+            admitted = true;
+            break;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+    assert!(admitted, "a freed slot admits the address again");
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn identified_connections_that_never_enter_a_room_are_dropped() {
+    let server = server(|c| c.room_join_timeout = Duration::from_millis(500)).await;
+    let addr = server.local_addr();
+
+    // Hello, then nothing: squatting a connection slot without playing.
+    let mut squatter = TestClient::connect(addr, "Squatter").await;
+    // Someone who creates a room is not affected, and neither is a joiner.
+    let mut host = TestClient::connect(addr, "Hote").await;
+    let code = host
+        .create(room_config(Mode::Course, Difficulty::Facile, 1))
+        .await
+        .code;
+    let mut guest = TestClient::connect(addr, "Invite").await;
+    guest.join(&code).await;
+
+    assert_eq!(squatter.closed().await, Some(CLOSE_POLICY));
+    sleep(Duration::from_millis(500)).await;
+    host.send(&ClientMsg::Ping).await;
+    assert_eq!(
+        host.recv_where(|m| (*m == ServerMsg::Pong).then_some(()))
+            .await,
+        ()
+    );
+    guest.send(&ClientMsg::Ping).await;
+    assert_eq!(
+        guest
+            .recv_where(|m| (*m == ServerMsg::Pong).then_some(()))
+            .await,
+        ()
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn slow_or_silent_http_clients_are_cut_at_the_header_timeout() {
+    use tokio::io::AsyncWriteExt;
+    let server = server(|c| c.header_read_timeout = Duration::from_millis(400)).await;
+    let addr = server.local_addr();
+
+    // Slowloris: half a request head, or nothing at all, is cut at the timeout...
+    let mut half = TcpStream::connect(addr).await.unwrap();
+    half.write_all(b"GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n")
+        .await
+        .unwrap();
+    let mut nothing = TcpStream::connect(addr).await.unwrap();
+    assert!(
+        closed_by_server(&mut half, Duration::from_secs(5)).await,
+        "half a request"
+    );
+    assert!(
+        closed_by_server(&mut nothing, Duration::from_secs(5)).await,
+        "a silent socket"
+    );
+    // ...while a prompt client is served normally.
+    assert_eq!(http_get(addr, "/healthz").await.0, 200);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn sockets_in_their_http_phase_are_capped_at_twice_the_connection_cap() {
+    // max_connections 2 -> at most 4 sockets that have not upgraded yet.
+    let server = server(|c| {
+        c.max_connections = 2;
+        c.header_read_timeout = Duration::from_secs(60);
+    })
+    .await;
+    let addr = server.local_addr();
+
+    let mut held = Vec::new();
+    for _ in 0..4 {
+        held.push(TcpStream::connect(addr).await.unwrap());
+        sleep(Duration::from_millis(50)).await; // let the accept loop register it
+    }
+    let mut fifth = TcpStream::connect(addr).await.unwrap();
+    assert!(
+        closed_by_server(&mut fifth, Duration::from_secs(3)).await,
+        "the fifth raw socket is closed at once"
+    );
+    assert!(
+        !closed_by_server(&mut held[0], Duration::from_millis(300)).await,
+        "the first four are left alone"
+    );
+
+    // Freeing a socket makes room again.
+    held.pop();
+    sleep(Duration::from_millis(300)).await;
+    let mut again = TcpStream::connect(addr).await.unwrap();
+    assert!(!closed_by_server(&mut again, Duration::from_millis(300)).await);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_flood_of_pongs_is_rate_limited_like_any_other_frame() {
+    let server = server(|_| {}).await;
+    let addr = server.local_addr();
+    let mut c = TestClient::connect(addr, "Pong").await;
+    for _ in 0..400 {
+        if !c.try_send_ws(Message::Pong(Vec::new().into())).await {
+            break;
+        }
+    }
+    assert_eq!(c.closed().await, Some(CLOSE_POLICY));
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn idle_connections_are_dropped_at_the_idle_timeout_not_at_the_next_ping() {
+    // Pings are 30 s apart, so only the idle timer can drop the silent client, and it must do
+    // so about 600 ms after its last frame (not at the next ping tick).
+    let server = server(|c| {
+        c.ping_interval = Duration::from_secs(30);
+        c.idle_timeout = Duration::from_millis(600);
+    })
+    .await;
+    let addr = server.local_addr();
+    let mut live = TestClient::connect(addr, "Live").await;
+    let mut quiet = TestClient::connect(addr, "Quiet").await;
+    let code = live
+        .create(room_config(Mode::Course, Difficulty::Facile, 1))
+        .await
+        .code;
+    quiet.join(&code).await;
+    let started = std::time::Instant::now();
+
+    // `live` keeps talking (a ping every 200 ms) so it is never idle; `quiet` says nothing.
+    let dropped_after = timeout(Duration::from_secs(5), async {
+        loop {
+            tokio::select! {
+                frame = live.next() => {
+                    if let Frame::Msg(ServerMsg::RoomSnapshot(s)) = frame
+                        && s.players.iter().any(|p| p.nickname == "Quiet" && !p.connected)
+                    {
+                        return started.elapsed();
+                    }
+                }
+                () = sleep(Duration::from_millis(200)) => live.send(&ClientMsg::Ping).await,
+            }
+        }
+    })
+    .await
+    .expect("the quiet client was dropped");
+    assert!(
+        dropped_after >= Duration::from_millis(500) && dropped_after < Duration::from_millis(1_500),
+        "dropped after {dropped_after:?}, expected about the 600 ms idle timeout"
+    );
+    drop(quiet);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn guessing_room_codes_gets_the_connection_closed() {
+    let server = server(|_| {}).await;
+    let addr = server.local_addr();
+    let mut c = TestClient::connect(addr, "Prober").await;
+    for i in 0..8 {
+        c.send(&ClientMsg::JoinRoom {
+            code: format!("ZZZZ{}", i + 2),
+        })
+        .await;
+    }
+    let mut not_found = 0;
+    let code = loop {
+        match c.next().await {
+            Frame::Msg(ServerMsg::Error {
+                code: ErrorCode::RoomNotFound,
+                ..
+            }) => not_found += 1,
+            Frame::Msg(other) => panic!("unexpected {other:?}"),
+            Frame::Closed(code) => break code,
+        }
+    };
+    assert_eq!(code, Some(CLOSE_POLICY));
+    assert!(
+        (5..=6).contains(&not_found),
+        "{not_found} answers before the close"
+    );
+
+    // A client that mistypes a code a couple of times is fine.
+    let mut honest = TestClient::connect(addr, "Honest").await;
+    for _ in 0..3 {
+        honest
+            .send(&ClientMsg::JoinRoom {
+                code: "ZZZZZ".into(),
+            })
+            .await;
+        honest.expect_error(ErrorCode::RoomNotFound).await;
+    }
+    honest.send(&ClientMsg::Ping).await;
+    assert_eq!(honest.recv().await, ServerMsg::Pong);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn shutdown_returns_only_after_every_client_has_its_goodbye() {
+    let server = server(|c| c.max_connections_per_ip = 1_000).await;
+    let addr = server.local_addr();
+    let mut clients = Vec::new();
+    for i in 0..60 {
+        clients.push(TestClient::connect(addr, &format!("c{i}")).await);
+    }
+    assert!(server.is_running());
+
+    // Nobody reads while the server shuts down: the goodbyes must already be in the pipe when
+    // `shutdown()` returns.
+    server.shutdown().await;
+    for (i, c) in clients.iter_mut().enumerate() {
+        assert_eq!(
+            c.closed().await,
+            Some(1001),
+            "client {i} got the 1001 close"
+        );
+    }
+    assert!(
+        TcpStream::connect(addr).await.is_err(),
+        "the listener is gone"
     );
 }

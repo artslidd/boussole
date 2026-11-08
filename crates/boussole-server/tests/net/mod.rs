@@ -56,16 +56,31 @@ pub struct TestClient {
 impl TestClient {
     /// Open the socket without any handshake message.
     pub async fn raw(addr: SocketAddr) -> Self {
-        let (ws, _) = timeout(WAIT, connect_async(format!("ws://{addr}/ws")))
+        Self::raw_with_headers(addr, &[])
             .await
-            .expect("connect timeout")
-            .expect("websocket handshake");
-        Self {
+            .expect("websocket handshake")
+    }
+
+    /// Like [`TestClient::raw`] with extra upgrade-request headers (what a proxy or tunnel adds),
+    /// returning the handshake error (an HTTP refusal such as 429/503) instead of panicking.
+    pub async fn raw_with_headers(
+        addr: SocketAddr,
+        headers: &[(&'static str, &str)],
+    ) -> Result<Self, tokio_tungstenite::tungstenite::Error> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut request = format!("ws://{addr}/ws").into_client_request().unwrap();
+        for (name, value) in headers {
+            request.headers_mut().insert(*name, value.parse().unwrap());
+        }
+        let (ws, _) = timeout(WAIT, connect_async(request))
+            .await
+            .expect("connect timeout")?;
+        Ok(Self {
             ws,
             id: 0,
             token: String::new(),
             frames: Vec::new(),
-        }
+        })
     }
 
     /// Connect and complete `hello`.
@@ -434,8 +449,8 @@ pub fn assert_round_safe(frames: &[String], secret: &str, difficulty: Difficulty
             if has_hints {
                 let json: serde_json::Value = serde_json::from_str(frame).unwrap();
                 assert!(
-                    !contains_key(&json, "distance_km") || only_in_guesses(&json),
-                    "distance_km in a Difficile frame: {frame}"
+                    only_in_guesses(&json),
+                    "a hint carries distance_km in a Difficile frame: {frame}"
                 );
             }
         }
@@ -466,4 +481,19 @@ fn only_in_guesses(v: &serde_json::Value) -> bool {
         }
     }
     !hints_have_distance(v)
+}
+
+/// `true` if the server closed this plain TCP socket within `within` (EOF or reset), `false`
+/// if it is still open after that. Anything the server sends first (e.g. an HTTP 408) is read
+/// and ignored.
+pub async fn closed_by_server(stream: &mut TcpStream, within: Duration) -> bool {
+    let mut buf = [0u8; 512];
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        match tokio::time::timeout_at(deadline, stream.read(&mut buf)).await {
+            Err(_) => return false,
+            Ok(Ok(0) | Err(_)) => return true,
+            Ok(Ok(_)) => {}
+        }
+    }
 }
