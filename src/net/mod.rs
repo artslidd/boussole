@@ -22,6 +22,11 @@ pub enum NetError {
     Protocol,
     /// The connection dropped and could not be restored within the reconnect window.
     ConnectionLost,
+    /// The server closed the WebSocket with code 1001 ("going away"): that is how a server shuts
+    /// down, and for a hosted game it means the host closed the game. Never retried.
+    ServerClosed,
+    /// The server answered the WebSocket upgrade with HTTP 503: it is over its connection cap.
+    ServerFull,
 }
 
 impl fmt::Display for NetError {
@@ -32,6 +37,8 @@ impl fmt::Display for NetError {
             Self::Rejected(code) => f.write_str(&text::error_fr(*code)),
             Self::Protocol => f.write_str("Réponse inattendue : ce n’est pas un serveur Boussole."),
             Self::ConnectionLost => f.write_str(text::CONNECTION_LOST),
+            Self::ServerClosed => f.write_str(text::HOST_CLOSED),
+            Self::ServerFull => f.write_str(text::SERVER_FULL),
         }
     }
 }

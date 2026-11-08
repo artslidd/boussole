@@ -668,7 +668,11 @@ impl OnlineUi {
             }
             NetEvent::Failed(error) => {
                 let stage = self.inner.core.borrow().stage;
-                if matches!(stage, Stage::Connecting | Stage::Starting) {
+                // A server that says goodbye (close code 1001) is a host closing the game: back
+                // to the menu with that message, not a "reconnecting" banner.
+                if matches!(stage, Stage::Connecting | Stage::Starting)
+                    || error == crate::net::NetError::ServerClosed
+                {
                     self.fail_to_menu(error.to_string(), None);
                 } else {
                     let mut core = self.inner.core.borrow_mut();
@@ -726,6 +730,15 @@ impl OnlineUi {
             } else if is_error {
                 let code = core.state.last_error;
                 let text = core.state.notice.as_ref().map(|n| n.text.clone());
+                // `invalid_state` in answer to our `create_room` is how a server at its room
+                // cap refuses: say that instead of the generic "Action impossible".
+                let creating = matches!(core.intent, Some(Intent::Host | Intent::Create));
+                let text = match code {
+                    Some(ErrorCode::InvalidState) if creating => {
+                        Some(crate::online::text::CANNOT_CREATE_ROOM.to_owned())
+                    }
+                    _ => text,
+                };
                 match (core.stage, text) {
                     (Stage::Connecting, Some(text)) => fail = Some((text, code)),
                     (Stage::InRoom, Some(text)) => {

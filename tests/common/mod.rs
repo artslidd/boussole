@@ -13,9 +13,11 @@ use std::collections::HashMap;
 use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc as tokio_mpsc;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 
 /// How the server answers `hello`.
 #[derive(Debug, Clone)]
@@ -31,6 +33,8 @@ pub enum Handshake {
 enum Outgoing {
     Text(String),
     Close,
+    /// A closing handshake carrying this WebSocket close code (1001 = server going away).
+    CloseWith(u16),
     /// Drop the TCP connection without a closing handshake.
     Kill,
 }
@@ -46,6 +50,9 @@ struct Shared {
     tokens: HashMap<String, u32>,
     next_player: u32,
     refuse: bool,
+    /// Answer every connection with this HTTP status instead of upgrading it (a server over
+    /// its connection cap says 503 before the WebSocket handshake).
+    http_status: Option<u16>,
     closed_by_client: usize,
 }
 
@@ -94,6 +101,11 @@ impl MockServer {
                                 drop(stream);
                                 continue;
                             }
+                            let http_status = state.lock().unwrap().http_status;
+                            if let Some(status) = http_status {
+                                tokio::spawn(answer_http(stream, status));
+                                continue;
+                            }
                             tokio::spawn(serve(stream, state.clone(), incoming_tx.clone()));
                         }
                         _ = stop_rx.recv() => break,
@@ -126,6 +138,20 @@ impl MockServer {
     /// Stop accepting connections: new ones are closed at once (the server "is down").
     pub fn refuse_connections(&self, refuse: bool) {
         self.shared.lock().unwrap().refuse = refuse;
+    }
+
+    /// Answer new connections with `HTTP <status>` instead of a WebSocket upgrade (`None`:
+    /// accept them normally again).
+    pub fn answer_with_http_status(&self, status: Option<u16>) {
+        self.shared.lock().unwrap().http_status = status;
+    }
+
+    /// Close the newest connection with a closing handshake carrying `code`: what a server
+    /// shutting down does (1001).
+    pub fn close_connection_with_code(&self, code: u16) {
+        if let Some(tx) = &self.shared.lock().unwrap().current {
+            let _ = tx.send(Outgoing::CloseWith(code));
+        }
     }
 
     /// Send a message on the newest connection.
@@ -239,6 +265,14 @@ async fn serve(
                     let _ = write.send(Message::Close(None)).await;
                     break;
                 }
+                Some(Outgoing::CloseWith(code)) => {
+                    let frame = CloseFrame {
+                        code: code.into(),
+                        reason: "".into(),
+                    };
+                    let _ = write.send(Message::Close(Some(frame))).await;
+                    break;
+                }
                 // Leaving the loop drops both halves: the TCP connection goes away.
                 Some(Outgoing::Kill) | None => break,
             },
@@ -282,6 +316,17 @@ async fn serve(
         }
     }
     state.lock().unwrap().closed_by_client += 1;
+}
+
+/// Read the client's upgrade request, answer it with a bare HTTP status and hang up.
+async fn answer_http(mut stream: tokio::net::TcpStream, status: u16) {
+    let mut buffer = [0u8; 2048];
+    let _ = tokio::time::timeout(Duration::from_millis(500), stream.read(&mut buffer)).await;
+    let response = format!(
+        "HTTP/1.1 {status} Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    let _ = stream.write_all(response.as_bytes()).await;
+    let _ = stream.shutdown().await;
 }
 
 /// The `welcome` for a `hello`: a known token restores its player, anything else is a new one.

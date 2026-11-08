@@ -1580,6 +1580,64 @@ fn a_server_that_forgot_us_sends_the_player_back_to_the_menu_with_an_explanation
 }
 
 #[test]
+fn the_host_closing_the_game_sends_everybody_back_to_the_menu_without_reconnecting() {
+    // A shutting-down server says goodbye with WebSocket close code 1001 and no protocol message.
+    let (ui, server) = joined(course_config(), alice_and_bob());
+    server.close_connection_with_code(1001);
+    ui.wait("the menu", |ui| ui.screen() == OnlineScreen::Menu);
+    assert_eq!(ui.online().get_error(), "L’hôte a fermé la partie.");
+    assert_eq!(
+        ui.online().get_banner_kind(),
+        BannerKind::None,
+        "not a connection blip"
+    );
+    assert_eq!(ui.app.online().stage(), Stage::Menu);
+    assert!(ui.no_msg(&server));
+    assert_eq!(
+        server.connections(),
+        1,
+        "the client did not try to reconnect"
+    );
+}
+
+#[test]
+fn a_server_over_its_connection_cap_is_reported_on_the_menu() {
+    let ui = ui(1000, 760);
+    let server = MockServer::start();
+    server.answer_with_http_status(Some(503));
+    ui.open_menu();
+    ui.fill_join(&server, "K7QX2");
+    ui.button("Rejoindre");
+    ui.wait("the error", |ui| !ui.online().get_error().is_empty());
+    assert!(
+        ui.online().get_error().contains("plein"),
+        "{}",
+        ui.online().get_error()
+    );
+    assert_eq!(ui.screen(), OnlineScreen::Menu);
+}
+
+#[test]
+fn a_create_room_refused_at_the_room_cap_is_explained() {
+    // The server answers `invalid_state` when it cannot hold another room.
+    let ui = ui(1000, 760);
+    let server = MockServer::start();
+    ui.open_menu();
+    ui.fill("Pseudo", "Alice");
+    ui.fill("Adresse", &format!("127.0.0.1:{}", server.port));
+    ui.button("Créer une salle");
+    assert!(matches!(ui.next_msg(&server), ClientMsg::CreateRoom { .. }));
+    server.send(ServerMsg::error(ErrorCode::InvalidState));
+    ui.wait("the error", |ui| !ui.online().get_error().is_empty());
+    assert!(
+        ui.online().get_error().contains("créer de salle"),
+        "{}",
+        ui.online().get_error()
+    );
+    assert_eq!(ui.screen(), OnlineScreen::Menu);
+}
+
+#[test]
 fn a_deleted_room_sends_everybody_back_to_the_menu() {
     let (ui, server) = joined(course_config(), alice_and_bob());
     server.send(ServerMsg::error(ErrorCode::RoomNotFound));

@@ -93,6 +93,27 @@ impl std::error::Error for HostError {}
 /// Starts and stops the embedded server (and its tunnel). Both calls may block for a few
 /// seconds (binding, waiting for the tunnel address, shutting down): the UI calls them from a
 /// worker thread, never from the UI thread.
+///
+/// # The real implementation (ticket 04's embeddable API)
+///
+/// It owns a multi-thread tokio runtime, because `boussole_server::start` spawns on the
+/// *current* runtime and the server must keep running between calls; `start` is a
+/// `runtime.block_on`, `stop` another one. The mapping:
+///
+/// * [`HostMode::Lan`]: `start(ServerConfig::for_host_mode("0.0.0.0:7878"))`, falling back to a
+///   free port when 7878 is taken; `local_url` = `ws://127.0.0.1:<port>/ws` (from
+///   `ServerHandle::local_addr`), `lan_urls` = `lan_ws_urls(port)`, no `tunnel_url`.
+/// * [`HostMode::Tunnel`]: bind `127.0.0.1:0`, then `tunnel::start_cloudflared(port)`;
+///   `tunnel_url` = `Tunnel::public_ws_url()`, no LAN URLs (the server is not reachable there).
+///   `TunnelError::NotInstalled` → [`HostError::TunnelNotInstalled`]; `StartFailed(_)` and
+///   `Timeout` → [`HostError::TunnelFailed`]; the server is shut down again on any failure.
+/// * An `io::ErrorKind::AddrInUse` bind error → [`HostError::PortInUse`], any other → `Other`.
+/// * `stop`: `Tunnel::stop().await` first (cloudflared is killed), then
+///   `ServerHandle::shutdown().await`; clients then see WebSocket close code 1001, which the
+///   client treats as "the host closed the game". Dropping either handle also stops it.
+///
+/// The host's own client connects to `local_url` like any other player and counts as one of the
+/// 16 connections of the host-mode server.
 pub trait Host: Send + Sync {
     /// Start the server (and the tunnel in [`HostMode::Tunnel`]). Starting while already running
     /// replaces the previous server.

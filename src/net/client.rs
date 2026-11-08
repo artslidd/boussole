@@ -27,7 +27,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, sleep_until, timeout};
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 
 /// How to connect and how patient to be.
 #[derive(Debug, Clone)]
@@ -153,6 +154,13 @@ enum Ended {
     Closed,
     /// The socket was lost or went silent.
     Dropped,
+    /// The server said goodbye with close code 1001: the game is over, do not retry.
+    ServerClosed,
+}
+
+/// Close code 1001 ("going away"): a server that is shutting down.
+fn is_going_away(frame: Option<&CloseFrame>) -> bool {
+    frame.is_some_and(|f| f.code == CloseCode::Away)
 }
 
 async fn run(config: NetConfig, mut commands: mpsc::UnboundedReceiver<Command>, sink: Sink) {
@@ -172,6 +180,10 @@ async fn run(config: NetConfig, mut commands: mpsc::UnboundedReceiver<Command>, 
             Ended::Closed => {
                 let _ = socket.close(None).await;
                 sink(NetEvent::Closed);
+                return;
+            }
+            Ended::ServerClosed => {
+                sink(NetEvent::Failed(NetError::ServerClosed));
                 return;
             }
             Ended::Dropped => {}
@@ -200,8 +212,9 @@ async fn run(config: NetConfig, mut commands: mpsc::UnboundedReceiver<Command>, 
                     sink(NetEvent::Msg(welcome));
                     break socket;
                 }
-                // The server was upgraded under us (or refuses us): retrying cannot help.
-                Err(error @ NetError::Rejected(_)) => {
+                // The server was upgraded under us, refuses us, or said it is going away:
+                // retrying cannot help. (A full server, 503, may have room later: keep trying.)
+                Err(error @ (NetError::Rejected(_) | NetError::ServerClosed)) => {
                     sink(NetEvent::Failed(error));
                     return;
                 }
@@ -251,7 +264,13 @@ async fn open(
             false,
         )
         .await
-        .map_err(|error| NetError::Unreachable(error.to_string()))?;
+        .map_err(|error| match error {
+            // Over the connection cap: the server answers before the WebSocket upgrade.
+            tokio_tungstenite::tungstenite::Error::Http(response) if response.status() == 503 => {
+                NetError::ServerFull
+            }
+            other => NetError::Unreachable(other.to_string()),
+        })?;
 
         let hello = ClientMsg::hello(config.nickname.clone(), resume_token.map(str::to_owned));
         socket
@@ -273,6 +292,9 @@ async fn open(
                     Ok(ServerMsg::Pong) => {}
                     Ok(_) | Err(_) => return Err(NetError::Protocol),
                 },
+                Some(Ok(Message::Close(frame))) if is_going_away(frame.as_ref()) => {
+                    return Err(NetError::ServerClosed);
+                }
                 Some(Ok(Message::Close(_))) | None => {
                     return Err(NetError::Unreachable("connexion fermée".into()));
                 }
@@ -305,6 +327,9 @@ async fn session(
                     if let Ok(msg) = decode_server(text.as_str()) {
                         sink(NetEvent::Msg(msg));
                     }
+                }
+                Some(Ok(Message::Close(frame))) if is_going_away(frame.as_ref()) => {
+                    return Ended::ServerClosed;
                 }
                 Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return Ended::Dropped,
                 Some(Ok(_)) => silent_after = Instant::now() + config.silence_limit,

@@ -113,8 +113,11 @@ From the start screen choose **Jouer en ligne**, type a **Pseudo** (1 to 16 char
   up to 60 s with the session's resume token, and the server restores your place, your guesses and
   the clock. After that you are offered *Retour au menu*.
 * **Errors** are in French and say what to do: *Serveur injoignable*, *Version incompatible —
-  mettez le jeu à jour*, *Le port est déjà utilisé*, *Tunnel indisponible*, a full or unknown room,
-  a nickname already taken… If `cloudflared` is missing the app explains how to install it and
+  mettez le jeu à jour*, *Le port est déjà utilisé*, *Tunnel indisponible*, *Salle pleine* (a server
+  over its connection cap), a full or unknown room, a nickname already taken… When the host
+  closes the game (the server goes away, WebSocket close code 1001) everybody is sent back to the
+  menu with *L’hôte a fermé la partie*: the client does not try to reconnect to a game that was
+  closed on purpose. If `cloudflared` is missing the app explains how to install it and
   offers the local network instead.
 * **Keyboard only** works from the start screen to the guesses: `Tab` moves between the nickname,
   the host/join forms and the buttons, `←` `→` change a choice, `Enter` confirms, and in a round

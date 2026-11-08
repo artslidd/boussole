@@ -7,6 +7,11 @@ pub const SESSION_EXPIRED: &str =
 pub const ROOM_CLOSED: &str = "La salle a été fermée.";
 pub const SERVER_UNREACHABLE: &str =
     "Serveur injoignable : vérifiez l’adresse, l’hôte et votre connexion.";
+pub const HOST_CLOSED: &str = "L’hôte a fermé la partie.";
+pub const SERVER_FULL: &str =
+    "Salle pleine : le serveur n’accepte plus de connexions pour le moment.";
+pub const CANNOT_CREATE_ROOM: &str =
+    "Le serveur ne peut pas créer de salle pour le moment (limite atteinte) : réessayez plus tard.";
 pub const CONNECTION_LOST: &str = "Connexion perdue : impossible de rejoindre le serveur.";
 
 /// What the player reads for a server error. Starts from the protocol's own French text and

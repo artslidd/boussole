@@ -389,6 +389,72 @@ fn a_silent_socket_is_treated_as_dropped() {
     assert!(resumed);
 }
 
+// --- the server going away, the server being full ------------------------------------------------
+
+#[test]
+fn a_server_shutdown_close_1001_means_the_host_closed_the_game_and_is_not_retried() {
+    let server = MockServer::start();
+    let client = connect(fast(&server.url));
+    welcome_of(client.next());
+    server.close_connection_with_code(1001);
+    assert_eq!(client.next(), NetEvent::Failed(NetError::ServerClosed));
+    assert!(
+        client.nothing_for(Duration::from_millis(400)),
+        "no reconnecting after the host closed the game"
+    );
+    assert_eq!(server.connections(), 1, "no new socket was opened");
+    assert_eq!(
+        NetError::ServerClosed.to_string(),
+        "L’hôte a fermé la partie."
+    );
+}
+
+#[test]
+fn other_close_codes_are_still_treated_as_a_network_blip_and_retried() {
+    // 1011: the server hit an internal error; the room may well still exist.
+    let server = MockServer::start();
+    let client = connect(fast(&server.url));
+    welcome_of(client.next());
+    server.close_connection_with_code(1011);
+    assert!(matches!(
+        client.next(),
+        NetEvent::Reconnecting { attempt: 1 }
+    ));
+    let (_, _, resumed) = welcome_of(client.next_skipping_reconnecting());
+    assert!(resumed);
+}
+
+#[test]
+fn a_server_over_its_connection_cap_is_reported_as_full() {
+    let server = MockServer::start();
+    server.answer_with_http_status(Some(503));
+    let client = connect(fast(&server.url));
+    assert_eq!(client.next(), NetEvent::Failed(NetError::ServerFull));
+    let message = NetError::ServerFull.to_string();
+    assert!(message.contains("plein"), "{message}");
+    assert_eq!(server.hellos().len(), 0, "the upgrade never happened");
+}
+
+#[test]
+fn a_full_server_while_reconnecting_is_just_retried_until_there_is_room() {
+    let server = MockServer::start();
+    let client = connect(fast(&server.url));
+    welcome_of(client.next());
+    server.answer_with_http_status(Some(503));
+    server.drop_connection();
+    assert!(matches!(
+        client.next(),
+        NetEvent::Reconnecting { attempt: 1 }
+    ));
+    std::thread::sleep(Duration::from_millis(150));
+    server.answer_with_http_status(None);
+    let (_, _, resumed) = welcome_of(client.next_skipping_reconnecting());
+    assert!(
+        resumed,
+        "the slot was kept: resumed once the server had room"
+    );
+}
+
 // --- closing ------------------------------------------------------------------------------------
 
 #[test]
