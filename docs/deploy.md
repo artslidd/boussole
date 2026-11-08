@@ -344,6 +344,14 @@ address (the compose `tls` profile, where Caddy is another container) is believe
 that proxy, or clients could forge their address. The compose file sets it for the `tls` profile
 only.
 
+**Container networks that hide the visitor's address.** Rootless Podman (and Docker Desktop)
+forward published ports through a helper, so every client then appears with the same address
+(the container network's gateway) and the per-address limit applies to all of them together.
+On such a setup raise it to the connection limit, for example
+`BOUSSOLE_MAX_CONNECTIONS_PER_IP=2000` (the compose file passes it through). Docker on a Linux
+server keeps real addresses. Caddy replaces any `X-Forwarded-For` a client sends with the
+address it sees, so the header cannot be forged through it.
+
 ### Logs
 
 Connections, disconnections (with the reason) and the number of rooms and players are logged at
@@ -367,7 +375,7 @@ with a non-zero status so that `restart: unless-stopped` (or any supervisor) res
 | Certificate or TLS errors, strange timestamps | The machine's clock is wrong: enable time synchronisation (NTP). The game itself only uses the server's monotonic clock and durations, never the clients' clocks. |
 | `create_room` is refused with *Action impossible à ce moment* | The server is at its room cap (`BOUSSOLE_MAX_ROOMS`). |
 | HTTP 503 on `/ws` | Connection cap reached, or the server is shutting down. |
-| HTTP 429 on `/ws` | Too many connections from your address (`BOUSSOLE_MAX_CONNECTIONS_PER_IP`; 4 when hosted from the game). Close your other clients, or use the LAN address instead of the tunnel. |
+| HTTP 429 on `/ws` | Too many connections from your address (`BOUSSOLE_MAX_CONNECTIONS_PER_IP`; 4 when hosted from the game). Close your other clients, or use the LAN address instead of the tunnel. If *every* client is refused after about 20 connections, the container network hides client addresses (rootless Podman, Docker Desktop): see [Limits](#limits). |
 | The server closes a connection that was idle in the menu | A connection must create or join a room within 60 s of connecting. Clients should connect when the player is ready to host or join, not earlier. |
 | `/healthz` answers 503, or the container keeps restarting | The engine task died: this is a bug, `docker logs` shows the last lines (a panic message); report it. |
 | Podman: *HEALTHCHECK is not supported for OCI image format* | Build with `podman build --format docker`; compose files carry their own health check anyway. |
