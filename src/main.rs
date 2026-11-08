@@ -1,45 +1,46 @@
-//! Placeholder binary: prints a sample round to stdout (ticket 02 replaces it with the GUI).
+//! Boussole: the desktop game.
 //!
-//! Usage: `cargo run -- [SEED] [--reveal]` — the secret stays hidden unless `--reveal`.
+//! `cargo run --release` opens the window. `--seed N` makes the games reproducible (round `k`
+//! of the session uses seed `N + k`), which is handy for demos and manual checks.
 
-use boussole::game::{Difficulty, Round};
-use boussole::geo::Compass8;
-use std::time::{SystemTime, UNIX_EPOCH};
+use boussole::app::App;
 
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let reveal = args.iter().any(|a| a == "--reveal");
-    let seed = args.iter().find_map(|a| a.parse().ok()).unwrap_or_else(|| {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos() as u64)
-    });
+fn main() -> Result<(), slint::PlatformError> {
+    let seed = seed_from_args(std::env::args().skip(1));
+    match seed {
+        Some(first) => App::with_seed_sequence(first)?.run(),
+        None => App::with_time_seeds()?.run(),
+    }
+}
 
-    for difficulty in [Difficulty::Facile, Difficulty::Difficile] {
-        let round = Round::new_random(difficulty, seed);
-        println!("Boussole — {} (graine {seed})", difficulty.label_fr());
-        println!(
-            "           ?   (ville secrète, {} essais)",
-            Round::MAX_GUESSES
-        );
-        for hint in round.hints() {
-            let compass = Compass8::from_bearing(hint.bearing_deg);
-            let distance = if difficulty.shows_distances() {
-                format!(" · {:.0} km", hint.distance_km)
-            } else {
-                String::new()
-            };
-            println!(
-                "  {} {:<2} {:>5.1}°  {}{distance}",
-                compass.arrow(),
-                compass.label_fr(),
-                hint.bearing_deg,
-                hint.city.name
-            );
+/// The value after `--seed`, if any (`--seed 42` or `--seed=42`).
+fn seed_from_args(args: impl IntoIterator<Item = String>) -> Option<u64> {
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        if arg == "--seed" {
+            return args.next().and_then(|value| value.parse().ok());
         }
-        if reveal {
-            println!("  secret : {}", round.secret().name);
+        if let Some(value) = arg.strip_prefix("--seed=") {
+            return value.parse().ok();
         }
-        println!();
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::seed_from_args;
+
+    fn parse(args: &[&str]) -> Option<u64> {
+        seed_from_args(args.iter().map(|a| (*a).to_owned()))
+    }
+
+    #[test]
+    fn seed_flag_is_parsed() {
+        assert_eq!(parse(&["--seed", "42"]), Some(42));
+        assert_eq!(parse(&["--seed=7"]), Some(7));
+        assert_eq!(parse(&[]), None);
+        assert_eq!(parse(&["--seed", "abc"]), None);
+        assert_eq!(parse(&["--other", "1"]), None);
     }
 }

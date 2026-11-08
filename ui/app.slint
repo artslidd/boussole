@@ -1,0 +1,543 @@
+// Boussole main window. Three phases, all driven from Rust (src/app.rs):
+//   setup   - start screen: pitch, difficulty, "Nouvelle partie"
+//   playing - header with the locked level, board, status strip, guess input + history
+//   ended   - same board with the answer revealed; the dock offers a new round
+
+import { AboutSlint } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Phase, Level, ArrowView, LabelView, GuessRow, Suggestion, BoardView } from "types.slint";
+import { PrimaryButton, GhostButton, LevelPicker, DialFace } from "widgets.slint";
+import { Board } from "board.slint";
+import { GuessInput, GuessHistory } from "guess.slint";
+
+export { Phase, Level, ArrowView, LabelView, GuessRow, Suggestion, BoardView }
+
+// Header / status / dock heights; the board gets the rest (see tests/ui_flow.rs).
+component Mark inherits Rectangle {
+    // Tiny compass mark in front of the title
+    in property <length> size: 26px;
+    width: root.size;
+    height: root.size;
+    Rectangle {
+        border-radius: root.size / 2;
+        border-width: 2px;
+        border-color: Theme.ink;
+    }
+
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 26;
+        viewbox-height: 26;
+        commands: "M 13 3.5 L 16.2 13 L 13 13 Z";
+        fill: Theme.signal;
+        stroke: Theme.signal;
+        stroke-width: 1px;
+        stroke-line-join: round;
+    }
+
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 26;
+        viewbox-height: 26;
+        commands: "M 13 22.5 L 9.8 13 L 13 13 Z";
+        fill: Theme.ink;
+        stroke: Theme.ink;
+        stroke-width: 1px;
+        stroke-line-join: round;
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Boussole";
+    preferred-width: 1000px;
+    preferred-height: 760px;
+    min-width: 800px;
+    min-height: 600px;
+    background: Theme.paper;
+    default-font-family: Theme.ui-font;
+    default-font-size: 15px;
+    default-font-weight: 400;
+
+    // --- State pushed by Rust -------------------------------------------------------------
+    in-out property <Phase> phase: Phase.setup;
+    // Level selected for the next round; the level of the round while playing (locked).
+    in-out property <Level> level: Level.facile;
+    in property <string> level-badge;
+
+    // Dial tick paths (a 200 × 200 box, from Rust) and the board version (see Board)
+    in property <string> ticks;
+    in property <string> north-tick;
+    in property <int> board-version;
+
+    in property <int> tries-used;
+    in property <int> max-tries: 6;
+    in property <[GuessRow]> history;
+    in-out property <string> query;
+    in property <[Suggestion]> suggestions;
+    in property <int> highlighted;
+    in property <bool> suggestions-open;
+    in property <string> notice;
+
+    in property <bool> won;
+    in property <string> result-before;
+    in property <string> result-city;
+    in property <string> result-after;
+
+    // --- Events sent to Rust ---------------------------------------------------------------
+    callback choose-level(Level);
+    callback start-round();
+    callback query-edited(string);
+    callback submit-guess(int);
+    callback move-highlight(int);
+    callback dismiss-suggestions();
+    callback toggle-browse();
+    pure callback compute-board(length, length, int) -> BoardView;
+
+    public function show-about() {
+        about.show();
+    }
+
+    // ======================================================================================
+    // Start screen
+    // ======================================================================================
+    if root.phase == Phase.setup: Rectangle {
+        HorizontalLayout {
+            padding-left: 40px;
+            padding-right: 40px;
+            padding-top: 24px;
+            padding-bottom: 24px;
+            spacing: 36px;
+
+            // Decorative dial
+            Rectangle {
+                horizontal-stretch: 4;
+                min-width: 260px;
+                hero-dial := DialFace {
+                    property <length> size: min(parent.width, parent.height * 0.82, 380px);
+                    width: self.size;
+                    height: self.size;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    ticks: root.ticks;
+                    north-tick: root.north-tick;
+                    text: "?";
+                    text-size: self.size * 0.42;
+                }
+            }
+
+            // Title, pitch, difficulty, start
+            VerticalLayout {
+                horizontal-stretch: 5;
+                min-width: 380px;
+                alignment: center;
+                spacing: 18px;
+
+                HorizontalLayout {
+                    spacing: 12px;
+                    alignment: start;
+                    Mark {
+                        size: 34px;
+                        y: (parent.height - self.height) / 2 + 3px;
+                    }
+
+                    Text {
+                        text: "Boussole";
+                        font-family: Theme.display-font;
+                        font-size: 46px;
+                        color: Theme.ink;
+                    }
+                }
+
+                Text {
+                    text: "Quelle ville se cache au centre de la boussole ?";
+                    font-size: 21px;
+                    color: Theme.ink;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: "Cinq flèches pointent, dans leur vraie direction, vers des villes connues. Trouvez la ville cachée en six essais.";
+                    font-size: 15px;
+                    color: Theme.ink-soft;
+                    wrap: word-wrap;
+                }
+
+                Rectangle {
+                    height: 6px;
+                }
+
+                Text {
+                    text: "Niveau de difficulté";
+                    font-size: 15px;
+                    font-weight: 600;
+                    color: Theme.ink;
+                }
+
+                start-picker := LevelPicker {
+                    level: root.level;
+                    chosen(level) => {
+                        root.choose-level(level);
+                    }
+                    confirmed => {
+                        root.start-round();
+                    }
+                    init => {
+                        self.focus-picker();
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 16px;
+                    alignment: start;
+                    PrimaryButton {
+                        text: "Nouvelle partie";
+                        clicked => {
+                            root.start-round();
+                        }
+                    }
+
+                    Text {
+                        text: "Flèches gauche et droite pour choisir, Entrée pour jouer";
+                        font-size: 13px;
+                        color: Theme.ink-soft;
+                        wrap: word-wrap;
+                        vertical-alignment: center;
+                        max-width: 200px;
+                    }
+                }
+            }
+        }
+
+        GhostButton {
+            width: 96px;
+            height: 32px;
+            x: parent.width - self.width - 16px;
+            y: parent.height - self.height - 12px;
+            text: "À propos";
+            clicked => {
+                root.show-about();
+            }
+        }
+    }
+
+    // ======================================================================================
+    // Round and end of round
+    // ======================================================================================
+    if root.phase != Phase.setup: VerticalLayout {
+        // Header
+        Rectangle {
+            height: 52px;
+            HorizontalLayout {
+                padding-left: 20px;
+                padding-right: 12px;
+                spacing: 10px;
+                Mark {
+                    y: (parent.height - self.height) / 2;
+                }
+
+                Text {
+                    text: "Boussole";
+                    font-family: Theme.display-font;
+                    font-size: 26px;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                if root.phase == Phase.playing: Rectangle {
+                    width: badge-text.preferred-width + 34px;
+                    height: 30px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: 15px;
+                    background: Theme.ink;
+                    accessible-role: text;
+                    accessible-label: "Niveau verrouillé pendant la partie : " + root.level-badge;
+                    badge-text := Text {
+                        x: 26px;
+                        width: self.preferred-width;
+                        height: 100%;
+                        text: root.level-badge;
+                        color: Theme.chart;
+                        font-size: 14px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                    }
+
+                    // padlock
+                    Path {
+                        x: 9px;
+                        y: 8px;
+                        width: 11px;
+                        height: 14px;
+                        viewbox-width: 11;
+                        viewbox-height: 14;
+                        commands: "M 2.5 6 L 2.5 4 A 3 3 0 0 1 8.5 4 L 8.5 6 M 1 6 L 10 6 L 10 13 L 1 13 Z";
+                        stroke: Theme.chart;
+                        stroke-width: 1.5px;
+                        stroke-line-join: round;
+                        fill: transparent;
+                    }
+                }
+
+                GhostButton {
+                    y: (parent.height - self.height) / 2;
+                    text: "À propos";
+                    clicked => {
+                        root.show-about();
+                    }
+                }
+            }
+        }
+
+        // Board
+        Board {
+            vertical-stretch: 1;
+            ticks: root.ticks;
+            north-tick: root.north-tick;
+            version: root.board-version;
+            compute(width, height, version) => {
+                return root.compute-board(width, height, version);
+            }
+        }
+
+        // Status strip: try counter while playing, result at the end
+        Rectangle {
+            height: 46px;
+            background: root.phase == Phase.playing ? Theme.rule : root.won ? Theme.go-wash : Theme.signal-wash;
+            border-width: 0px;
+            accessible-role: text;
+            accessible-label: root.phase == Phase.playing ? "Essai " + (root.tries-used + 1) + " sur " + root.max-tries : root.result-before + root.result-city + root.result-after;
+
+            if root.phase == Phase.playing: HorizontalLayout {
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 14px;
+                Text {
+                    text: "Essai " + min(root.tries-used + 1, root.max-tries) + " / " + root.max-tries;
+                    font-size: 17px;
+                    font-weight: 600;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    width: root.max-tries * 18px;
+                    for n in root.max-tries: Rectangle {
+                        x: n * 18px;
+                        y: (parent.height - self.height) / 2;
+                        width: 12px;
+                        height: 12px;
+                        border-radius: 6px;
+                        border-width: 2px;
+                        border-color: Theme.ink;
+                        background: n < root.tries-used ? Theme.ink : transparent;
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Text {
+                    text: "Les flèches indiquent où se trouvent cinq villes repères par rapport à la ville cachée.";
+                    font-size: 14px;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                    overflow: elide;
+                }
+            }
+
+            if root.phase == Phase.ended: HorizontalLayout {
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 0px;
+                alignment: start;
+                Text {
+                    text: root.result-before;
+                    font-family: Theme.display-font;
+                    font-size: 21px;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: root.result-city;
+                    font-family: Theme.display-font;
+                    font-size: 21px;
+                    color: root.won ? Theme.go : Theme.signal-ink;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: root.result-after;
+                    font-family: Theme.display-font;
+                    font-size: 21px;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Dock: guess input (or the new-round controls) on the left, history on the right
+        Rectangle {
+            height: 168px;
+            background: Theme.chart;
+            Rectangle {
+                y: 0px;
+                height: 1px;
+                background: Theme.ink;
+            }
+
+            HorizontalLayout {
+                padding: 14px;
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 28px;
+
+                Rectangle {
+                    horizontal-stretch: 4;
+                    min-width: 300px;
+                    max-width: 420px;
+
+                    if root.phase == Phase.playing: VerticalLayout {
+                        alignment: start;
+                        spacing: 6px;
+                        Text {
+                            text: "Quelle est la ville cachée ?";
+                            font-size: 16px;
+                            font-weight: 600;
+                            color: Theme.ink;
+                        }
+
+                        GuessInput {
+                            text <=> root.query;
+                            suggestions: root.suggestions;
+                            highlighted: root.highlighted;
+                            open: root.suggestions-open;
+                            edited(text) => {
+                                root.query-edited(text);
+                            }
+                            submit(index) => {
+                                root.submit-guess(index);
+                            }
+                            move-highlight(delta) => {
+                                root.move-highlight(delta);
+                            }
+                            dismiss => {
+                                root.dismiss-suggestions();
+                            }
+                            toggle-browse => {
+                                root.toggle-browse();
+                            }
+                        }
+
+                        Text {
+                            text: root.notice != "" ? root.notice : "Haut/Bas : choisir · Entrée : valider · Échap : fermer";
+                            font-size: 14px;
+                            font-weight: root.notice != "" ? 600 : 400;
+                            color: root.notice != "" ? Theme.signal-ink : Theme.ink-soft;
+                            overflow: elide;
+                            accessible-role: text;
+                            accessible-label: root.notice;
+                        }
+                    }
+
+                    if root.phase == Phase.ended: VerticalLayout {
+                        alignment: start;
+                        spacing: 14px;
+                        end-picker := LevelPicker {
+                            level: root.level;
+                            compact: true;
+                            stacked: false;
+                            chosen(level) => {
+                                root.choose-level(level);
+                            }
+                            confirmed => {
+                                root.start-round();
+                            }
+                            init => {
+                                self.focus-picker();
+                            }
+                        }
+
+                        PrimaryButton {
+                            text: "Nouvelle partie";
+                            clicked => {
+                                root.start-round();
+                            }
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    horizontal-stretch: 6;
+                    spacing: 6px;
+                    Text {
+                        text: "Distance et direction de chaque essai vers la ville cachée";
+                        font-size: 14px;
+                        color: Theme.ink-soft;
+                        overflow: elide;
+                    }
+
+                    GuessHistory {
+                        rows: root.history;
+                        height: 3 * 32px + 2 * 6px;
+                    }
+                }
+            }
+        }
+    }
+
+    // ======================================================================================
+    // À propos (Slint attribution for the royalty-free license)
+    // ======================================================================================
+    about := PopupWindow {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: 440px;
+        height: 400px;
+        close-policy: close-on-click-outside;
+
+        Rectangle {
+            border-radius: 14px;
+            border-width: 2px;
+            border-color: Theme.ink;
+            background: Theme.chart;
+        }
+
+        VerticalLayout {
+            padding: 24px;
+            spacing: 10px;
+            Text {
+                text: "À propos de Boussole";
+                font-family: Theme.display-font;
+                font-size: 24px;
+                color: Theme.ink;
+            }
+
+            Text {
+                text: "Jeu de devinettes sur les villes de France métropolitaine, écrit en Rust.";
+                font-size: 15px;
+                color: Theme.ink-soft;
+                wrap: word-wrap;
+            }
+
+            AboutSlint {
+                vertical-stretch: 1;
+            }
+
+            Text {
+                text: "Interface réalisée avec Slint, utilisé sous licence Royalty-Free. Polices : Young Serif et Barlow Semi Condensed (SIL Open Font License).";
+                font-size: 13px;
+                color: Theme.ink-soft;
+                wrap: word-wrap;
+            }
+        }
+    }
+}

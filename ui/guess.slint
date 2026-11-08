@@ -1,0 +1,313 @@
+// Guess input with autocomplete, and the guess history.
+
+import { Theme } from "theme.slint";
+import { GuessRow, Suggestion } from "types.slint";
+
+// The dropdown: up to eight rows visible, scrollable when the full list of cities is shown.
+// The highlighted row (keyboard) is scrolled into view.
+component SuggestionList inherits Rectangle {
+    in property <[Suggestion]> suggestions;
+    in property <int> highlighted;
+    in property <string> text;
+    callback submit(int);
+    property <length> row-height: 34px;
+    property <length> pad: 6px;
+
+    height: min(max(root.suggestions.length, 1), 8) * root.row-height + 2 * root.pad;
+    border-radius: 10px;
+    border-width: 2px;
+    border-color: Theme.ink;
+    background: Theme.chart;
+    clip: true;
+    accessible-role: list;
+    accessible-label: "Suggestions de villes";
+
+    changed highlighted => {
+        root.reveal();
+    }
+
+    function reveal() {
+        if (root.highlighted * root.row-height < -scroller.content-y) {
+            scroller.content-y = -(root.highlighted * root.row-height);
+        } else if ((root.highlighted + 1) * root.row-height + 2 * root.pad > -scroller.content-y + root.height) {
+            scroller.content-y = -((root.highlighted + 1) * root.row-height + 2 * root.pad - root.height);
+        }
+    }
+
+    if root.suggestions.length == 0: Text {
+        x: 14px;
+        width: parent.width - 28px;
+        height: parent.height;
+        text: "Aucune ville ne correspond à « " + root.text + " »";
+        color: Theme.ink-soft;
+        font-size: 16px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    scroller := Flickable {
+        width: parent.width;
+        height: parent.height;
+        content-width: self.width;
+        content-height: root.suggestions.length * root.row-height + 2 * root.pad;
+
+        for suggestion[index] in root.suggestions: Rectangle {
+            x: root.pad;
+            y: root.pad + index * root.row-height;
+            width: scroller.width - 2 * root.pad;
+            height: root.row-height;
+            border-radius: 7px;
+            background: index == root.highlighted ? Theme.amber-wash : row-touch.has-hover ? Theme.paper : transparent;
+            accessible-role: list-item;
+            accessible-label: suggestion.name;
+            accessible-item-selected: index == root.highlighted;
+            accessible-action-default => {
+                root.submit(index);
+            }
+
+            if index == root.highlighted: Rectangle {
+                x: 0px;
+                width: 4px;
+                height: parent.height;
+                border-radius: 2px;
+                background: Theme.amber-deep;
+            }
+
+            row-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.submit(index);
+                }
+            }
+
+            Text {
+                x: 14px;
+                width: parent.width - 28px;
+                height: parent.height;
+                text: suggestion.tried ? suggestion.name + "  (déjà essayée)" : suggestion.name;
+                color: suggestion.tried ? Theme.ink-soft : Theme.ink;
+                font-size: 17px;
+                font-weight: index == root.highlighted ? 600 : 400;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+// Text field + suggestion list that opens above the field. The field keeps the keyboard focus
+// while the list is open: Up/Down move the highlight, Enter submits it, Esc closes the list.
+export component GuessInput inherits Rectangle {
+    in-out property <string> text;
+    in property <[Suggestion]> suggestions;
+    in property <int> highlighted;
+    in property <bool> open;
+    // `submit(-1)`: Enter (the highlighted suggestion or the exact name); `submit(i)`: a click.
+    callback edited(string);
+    callback submit(int);
+    callback move-highlight(int);
+    callback dismiss();
+    // The chevron: show or hide the list of every city (for picking with the mouse).
+    callback toggle-browse();
+    public function focus-input() {
+        input.focus();
+    }
+    height: 46px;
+
+    init => {
+        input.focus();
+    }
+
+    field := Rectangle {
+        border-radius: 10px;
+        border-width: 2px;
+        border-color: Theme.ink;
+        background: Theme.chart;
+
+        if input.has-focus: Rectangle {
+            x: -5px;
+            y: -5px;
+            width: parent.width + 10px;
+            height: parent.height + 10px;
+            border-radius: 15px;
+            border-width: 2px;
+            border-color: Theme.amber-deep;
+        }
+
+        FocusScope {
+            capture-key-pressed(event) => {
+                if (event.text == Key.UpArrow) {
+                    root.move-highlight(-1);
+                    return accept;
+                }
+                if (event.text == Key.DownArrow) {
+                    root.move-highlight(1);
+                    return accept;
+                }
+                if (event.text == Key.Escape) {
+                    root.dismiss();
+                    return accept;
+                }
+                return reject;
+            }
+
+            input := TextInput {
+                x: 14px;
+                width: parent.width - 28px - 40px;
+                height: parent.height;
+                single-line: true;
+                text <=> root.text;
+                color: Theme.ink;
+                font-size: 18px;
+                selection-background-color: Theme.amber;
+                selection-foreground-color: Theme.ink;
+                vertical-alignment: center;
+                accessible-role: text-input;
+                accessible-label: "Nom de la ville à deviner";
+                edited => {
+                    root.edited(self.text);
+                }
+                accepted => {
+                    root.submit(-1);
+                }
+            }
+        }
+
+        // Chevron button
+        Rectangle {
+            x: parent.width - self.width - 4px;
+            y: 4px;
+            width: 36px;
+            height: parent.height - 8px;
+            border-radius: 7px;
+            background: chevron-touch.has-hover ? Theme.paper : transparent;
+            accessible-role: button;
+            accessible-label: "Afficher la liste des villes";
+            accessible-action-default => {
+                root.toggle-browse();
+            }
+
+            Path {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 14px;
+                height: 8px;
+                viewbox-width: 14;
+                viewbox-height: 8;
+                commands: root.open ? "M 1 7 L 7 1 L 13 7" : "M 1 1 L 7 7 L 13 1";
+                stroke: Theme.ink;
+                stroke-width: 2px;
+                stroke-line-cap: round;
+                stroke-line-join: round;
+                fill: transparent;
+            }
+
+            chevron-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    input.focus();
+                    root.toggle-browse();
+                }
+            }
+        }
+
+        if root.text == "": Text {
+            x: 14px;
+            width: parent.width - 28px - 40px;
+            height: parent.height;
+            text: "Tapez le nom d’une ville…";
+            color: Theme.ink-soft;
+            font-size: 18px;
+            vertical-alignment: center;
+        }
+    }
+
+    // Suggestions, opening upwards over the board
+    if root.open: SuggestionList {
+        y: -self.height - 8px;
+        width: 100%;
+        suggestions: root.suggestions;
+        highlighted: root.highlighted;
+        text: root.text;
+        submit(index) => {
+            root.submit(index);
+        }
+    }
+}
+
+// One slot of the history: name, distance to the hidden city and a small arrow pointing from
+// the guess towards it. Empty slots show their number.
+component GuessSlot inherits Rectangle {
+    in property <int> number;
+    in property <bool> filled;
+    in property <GuessRow> entry;
+    height: 32px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: !root.filled ? Theme.rule : root.entry.correct ? Theme.go : Theme.ink;
+    background: !root.filled ? transparent : root.entry.correct ? Theme.go-wash : Theme.chart;
+    accessible-role: text;
+    accessible-label: !root.filled ? "Essai " + root.number + " : libre" : root.entry.correct ? "Essai " + root.number + " : " + root.entry.name + ", trouvé" : "Essai " + root.number + " : " + root.entry.name + ", à " + root.entry.distance + " " + root.entry.direction;
+
+    if !root.filled: Text {
+        x: 12px;
+        width: parent.width - 24px;
+        height: parent.height;
+        text: root.number;
+        color: Theme.ink-soft;
+        font-size: 14px;
+        vertical-alignment: center;
+    }
+
+    if root.filled: HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+        Text {
+            text: root.entry.name;
+            color: Theme.ink;
+            font-size: 15px;
+            font-weight: 600;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.entry.distance;
+            color: root.entry.correct ? Theme.go : Theme.ink-soft;
+            font-size: 15px;
+            font-weight: root.entry.correct ? 600 : 500;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+        }
+
+        Path {
+            width: 20px;
+            viewbox-width: 20;
+            viewbox-height: 20;
+            commands: root.entry.arrow;
+            fill: root.entry.correct ? transparent : Theme.ink;
+            stroke: root.entry.correct ? Theme.go : Theme.ink;
+            stroke-width: 1.8px;
+            stroke-line-cap: round;
+            stroke-line-join: round;
+        }
+    }
+}
+
+// Six slots in two columns, filled top to bottom, then left to right.
+export component GuessHistory inherits Rectangle {
+    in property <[GuessRow]> rows;
+    in property <int> slots: 6;
+    property <length> gap: 10px;
+    property <length> slot-width: (root.width - root.gap) / 2;
+
+    for number in root.slots: GuessSlot {
+        x: floor(number / 3) * (root.slot-width + root.gap);
+        y: mod(number, 3) * (self.height + 6px);
+        width: root.slot-width;
+        number: number + 1;
+        filled: number < root.rows.length;
+        entry: number < root.rows.length ? root.rows[number] : { name: "", distance: "", arrow: "", direction: "", correct: false };
+    }
+}

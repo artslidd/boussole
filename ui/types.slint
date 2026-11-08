@@ -1,0 +1,56 @@
+// Data shared between the Rust glue (src/app.rs) and the components.
+
+export enum Phase { setup, playing, ended }
+
+export enum Level { facile, difficile }
+
+// One arrow of the board: SVG path strings in canvas coordinates (computed in Rust).
+export struct ArrowView {
+    shaft: string,
+    head: string,
+}
+
+// One label pill of the board, in canvas coordinates.
+export struct LabelView {
+    text: string,
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+}
+
+// One row of the guess history.
+export struct GuessRow {
+    name: string,
+    // "312 km", or "Trouvé" for the correct guess
+    distance: string,
+    // SVG path of a small arrow pointing from the guess towards the answer (20 × 20 box)
+    arrow: string,
+    // Spoken description of the direction, e.g. "au nord-est"
+    direction: string,
+    correct: bool,
+}
+
+export struct Suggestion {
+    name: string,
+    // already tried in this round
+    tried: bool,
+}
+
+// Everything the round canvas draws, computed in Rust for the current canvas size (pure
+// callback `compute-board`, re-evaluated whenever the size or the round changes).
+export struct BoardView {
+    arrows: [ArrowView],
+    labels: [LabelView],
+    // Dial centre and radii (tick ring, filled disc), in canvas coordinates
+    cx: length,
+    cy: length,
+    outer: length,
+    body: length,
+    // "?" while the city is hidden, its name once revealed
+    text: string,
+    text-size: length,
+    revealed: bool,
+    // Spoken summary of the board for assistive technology
+    summary: string,
+}

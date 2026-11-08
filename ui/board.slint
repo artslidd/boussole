@@ -1,0 +1,95 @@
+// The round canvas: dial with the hidden city, five arrows at their true bearing, labels at
+// the arrow tips and the compass rose. All geometry is computed in Rust (src/board.rs) by the
+// pure callback `compute`, which Slint re-evaluates whenever the canvas is resized or the
+// round changes; this file only draws the result.
+
+import { Theme } from "theme.slint";
+import { BoardView } from "types.slint";
+import { DialFace, CompassRose } from "widgets.slint";
+
+export component Board inherits Rectangle {
+    in property <string> ticks;
+    in property <string> north-tick;
+    // Bumped by Rust whenever the round (or its reveal state) changes.
+    in property <int> version;
+    pure callback compute(length, length, int) -> BoardView;
+
+    property <BoardView> view: root.compute(root.width, root.height, root.version);
+
+    background: Theme.paper;
+    accessible-role: image;
+    accessible-label: root.view.summary;
+
+    // Arrows: shaft (stroked line) + head (filled triangle), canvas coordinates
+    for arrow in root.view.arrows: Rectangle {
+        Path {
+            width: root.width;
+            height: root.height;
+            viewbox-width: root.width / 1px;
+            viewbox-height: root.height / 1px;
+            commands: arrow.shaft;
+            stroke: Theme.ink;
+            stroke-width: 3px;
+            stroke-line-cap: round;
+        }
+
+        Path {
+            width: root.width;
+            height: root.height;
+            viewbox-width: root.width / 1px;
+            viewbox-height: root.height / 1px;
+            commands: arrow.head;
+            fill: Theme.ink;
+            stroke: Theme.ink;
+            stroke-width: 1.5px;
+            stroke-line-join: round;
+        }
+    }
+
+    // The dial
+    DialFace {
+        x: root.view.cx - root.view.outer;
+        y: root.view.cy - root.view.outer;
+        width: 2 * root.view.outer;
+        height: 2 * root.view.outer;
+        ticks: root.ticks;
+        north-tick: root.north-tick;
+        body-diameter: 2 * root.view.body;
+        text: root.view.text;
+        text-size: root.view.text-size;
+        text-color: root.view.revealed ? Theme.ink : Theme.signal;
+        body-color: root.view.revealed ? Theme.amber-wash : Theme.chart;
+    }
+
+    // Labels at the arrow tips
+    for label in root.view.labels: Rectangle {
+        x: label.x;
+        y: label.y;
+        width: label.width;
+        height: label.height;
+        border-radius: self.height / 2;
+        border-width: 1.5px;
+        border-color: Theme.ink;
+        background: Theme.chart;
+        accessible-role: text;
+        accessible-label: label.text;
+
+        Text {
+            width: 100%;
+            height: 100%;
+            text: label.text;
+            color: Theme.ink;
+            font-size: 14px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: clip;
+            wrap: no-wrap;
+        }
+    }
+
+    CompassRose {
+        x: root.width - self.width - 12px;
+        y: root.height - self.height - 12px;
+    }
+}

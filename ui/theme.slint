@@ -1,0 +1,33 @@
+// Boussole visual identity: chart paper in cold lichen green, petrol-blue ink, one amber
+// for actions and a rhumb-line red kept for the north needle and the hidden city's "?".
+// Fonts are embedded so metrics (and screenshots) are identical on every machine; the board
+// geometry in src/board.rs measures labels with the same Barlow file.
+
+import "./fonts/YoungSerif-Regular.ttf";
+import "./fonts/BarlowSemiCondensed-Regular.ttf";
+import "./fonts/BarlowSemiCondensed-Medium.ttf";
+import "./fonts/BarlowSemiCondensed-SemiBold.ttf";
+
+export global Theme {
+    // Surfaces
+    out property <color> paper: #E4EBE6;
+    out property <color> chart: #F6F9F5;
+    out property <color> rule: #BCCBC4;
+    // Text and drawing
+    out property <color> ink: #0F2E35;
+    out property <color> ink-soft: #4B656B;
+    // Action (amber) and states
+    out property <color> amber: #F0BD2A;
+    out property <color> amber-hover: #F6CC4F;
+    out property <color> amber-deep: #D9A515;
+    out property <color> amber-wash: #FBEFC4;
+    out property <color> signal: #D9482B;
+    out property <color> signal-ink: #A8341D;
+    out property <color> signal-wash: #F8DDD5;
+    out property <color> go: #236346;
+    out property <color> go-wash: #D5EADC;
+
+    // Type
+    out property <string> display-font: "Young Serif";
+    out property <string> ui-font: "Barlow Semi Condensed";
+}
