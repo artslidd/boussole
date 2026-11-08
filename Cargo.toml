@@ -1,0 +1,10 @@
+[package]
+name = "boussole"
+version = "0.1.0"
+edition = "2024"
+description = "Boussole: guess the hidden French city from compass arrows to other cities"
+publish = false
+
+# No dependencies on purpose: the core is pure std (tiny in-crate SplitMix64 PRNG).
+# The GUI toolkit is added by ticket 02, not here.
+[dependencies]
