@@ -169,16 +169,25 @@ async fn send(ws: &mut Ws, msg: ClientMsg) -> Result<(), String> {
         .map_err(|e| format!("send: {e}"))
 }
 
-/// Send the next guess and remember it until it is answered, so that it can be sent again if
-/// the server was too busy to take it (`rate_limited`).
+/// Send `msg` and remember it until the server has answered it, so that it can be sent again
+/// if the server was too busy to take it (`rate_limited`).
+async fn request(
+    ws: &mut Ws,
+    pending: &mut Option<ClientMsg>,
+    msg: ClientMsg,
+) -> Result<(), String> {
+    *pending = Some(msg.clone());
+    send(ws, msg).await
+}
+
+/// Send the next guess (see [`request`]).
 async fn guess(
     ws: &mut Ws,
     strat: &mut Strategy,
-    pending: &mut Option<&'static str>,
+    pending: &mut Option<ClientMsg>,
 ) -> Result<(), String> {
-    let city = strat.next_guess();
-    *pending = Some(city);
-    send(ws, ClientMsg::Guess { city: city.into() }).await
+    let city = strat.next_guess().into();
+    request(ws, pending, ClientMsg::Guess { city }).await
 }
 
 async fn play(args: Args) -> Result<(), String> {
@@ -195,7 +204,7 @@ async fn play(args: Args) -> Result<(), String> {
     // Course or Coopération is the room's setting: learned from the first round_started.
     let mut course = args.mode == Mode::Course;
     let think = args.think;
-    let mut pending: Option<&'static str> = None;
+    let mut pending: Option<ClientMsg> = None;
     let mut round_seen = false;
     let start_deadline = tokio::time::Instant::now() + args.wait;
 
@@ -221,7 +230,7 @@ async fn play(args: Args) -> Result<(), String> {
             ServerMsg::Welcome { player_id, .. } => {
                 me = player_id;
                 println!("{tag} connected as player {me}");
-                let request = if args.create {
+                let first = if args.create {
                     ClientMsg::CreateRoom {
                         config: RoomConfig {
                             rounds: args.rounds,
@@ -233,9 +242,15 @@ async fn play(args: Args) -> Result<(), String> {
                         code: args.room.clone().unwrap_or_default(),
                     }
                 };
-                send(&mut ws, request).await?;
+                request(&mut ws, &mut pending, first).await?;
             }
             ServerMsg::RoomSnapshot(s) => {
+                if matches!(
+                    pending,
+                    Some(ClientMsg::CreateRoom { .. } | ClientMsg::JoinRoom { .. })
+                ) {
+                    pending = None;
+                }
                 if !joined {
                     joined = true;
                     println!("{tag} in room {}", s.code);
@@ -254,7 +269,7 @@ async fn play(args: Args) -> Result<(), String> {
                         "{tag} {} players in the room, starting the match",
                         args.players
                     );
-                    send(&mut ws, ClientMsg::StartMatch).await?;
+                    request(&mut ws, &mut pending, ClientMsg::StartMatch).await?;
                 }
             }
             ServerMsg::RoundStarted(r) => {
@@ -334,8 +349,8 @@ async fn play(args: Args) -> Result<(), String> {
             } => {
                 eprintln!("{tag} slowed down by the server ({message}); backing off");
                 tokio::time::sleep(RATE_LIMIT_BACKOFF).await;
-                if let Some(city) = pending {
-                    send(&mut ws, ClientMsg::Guess { city: city.into() }).await?;
+                if let Some(msg) = pending.clone() {
+                    send(&mut ws, msg).await?;
                 }
             }
             ServerMsg::Error { code, message } => match code {
