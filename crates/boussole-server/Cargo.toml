@@ -3,11 +3,20 @@ name = "boussole-server"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-description = "Boussole multiplayer server: pure match engine (networking is added by ticket 04)"
+description = "Boussole multiplayer server: match engine, axum/WebSocket transport, embeddable host API, tunnel helper"
 
 [dependencies]
 boussole-core.workspace = true
 boussole-protocol.workspace = true
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "ws", "json"] }
+getrandom = "0.4"
+if-addrs = "0.15"
+serde.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal", "process", "io-util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 [dev-dependencies]
-serde_json.workspace = true
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+tokio-tungstenite = "0.30"
