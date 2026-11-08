@@ -2102,6 +2102,50 @@ fn giving_up_shows_the_lost_banner_and_a_way_back() {
 }
 
 #[test]
+fn the_longest_reconnect_banner_fits_the_header_at_the_minimum_width() {
+    let (ui, server) = joined_at(800, 600, course_config(), eight_players());
+    start_round(
+        &server,
+        course_config(),
+        eight_players(),
+        round_started(fixture!("round_started_course_facile")),
+    );
+    ui.wait("the round", |ui| ui.screen() == OnlineScreen::Round);
+    // past the deadline: the last attempt is running
+    ui.app
+        .online()
+        .deliver_event(boussole::net::NetEvent::Reconnecting {
+            attempt: 9,
+            give_up_at: Instant::now() - Duration::from_secs(1),
+        });
+    ui.h.settle();
+    assert_eq!(
+        ui.online().get_banner_text(),
+        "Reconnexion… dernière tentative"
+    );
+    let span = |label: &str| {
+        let e = ui.element(label, None);
+        let x = e.absolute_position().x;
+        (x, x + e.size().width)
+    };
+    let clock = span(&format!("Temps restant : {}", ui.online().get_clock_text()));
+    let banner = span("Reconnexion… dernière tentative");
+    let quit = span("Quitter");
+    assert!(
+        clock.1 <= banner.0 + 0.5,
+        "clock/banner overlap: {clock:?} vs {banner:?}"
+    );
+    assert!(
+        banner.1 <= quit.0 + 0.5,
+        "banner/quitter overlap: {banner:?} vs {quit:?}"
+    );
+    assert!(
+        quit.1 <= 800.0 + 0.5,
+        "Quitter is inside the window: {quit:?}"
+    );
+}
+
+#[test]
 fn the_header_never_overlaps_at_the_minimum_width_even_with_every_pill_showing() {
     let (ui, server) = joined_at(800, 600, course_config(), eight_players());
     start_round(
