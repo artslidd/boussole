@@ -91,6 +91,10 @@ impl Drop for EmptyConfig {
 
 impl Tunnel {
     /// `wss://<words>.trycloudflare.com/ws`, the address to share with friends.
+    ///
+    /// It is returned as soon as `cloudflared` prints it, which can be a few seconds before
+    /// the address is reachable (cloudflared says "it may take some time"; the live runs
+    /// answered on the first probe). A UI should say "share it in a few seconds", not "ready".
     pub fn public_ws_url(&self) -> &str {
         &self.ws_url
     }

@@ -58,7 +58,9 @@ forwards to your server, WebSocket included. Things to know:
 
 - **No account, no cost, no configuration.**
 - **The address is random and changes every time you start it.** Send the new one to your
-  friends each time.
+  friends each time. It is printed as soon as `cloudflared` has it, which can be a few seconds
+  before it works (in the test runs it answered at once); if friends get an error right away,
+  ask them to retry in a moment.
 - **Testing grade:** Cloudflare gives quick tunnels no uptime guarantee (and limits concurrent
   requests). It is meant for game nights, not for a permanent service. For that, use
   [section 3](#3-optional-always-on-remote-host).
