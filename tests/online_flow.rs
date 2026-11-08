@@ -1812,6 +1812,41 @@ fn the_round_clock_counts_down_on_screen() {
     assert!(ui.online().get_clock_urgent());
 }
 
+#[test]
+fn the_reconnect_banner_counts_to_the_deadline_the_net_layer_announced() {
+    let (ui, _server) = course_round();
+    let t0 = Instant::now();
+    let offset = Rc::new(std::cell::Cell::new(Duration::ZERO));
+    let o = offset.clone();
+    ui.app.online().set_clock(Rc::new(move || t0 + o.get()));
+    ui.app
+        .online()
+        .deliver_event(boussole::net::NetEvent::Reconnecting {
+            attempt: 2,
+            give_up_at: t0 + Duration::from_secs(60),
+        });
+    assert_eq!(ui.online().get_banner_kind(), BannerKind::Reconnecting);
+    assert_eq!(ui.online().get_banner_text(), "Reconnexion… 60 s");
+    offset.set(Duration::from_secs(25));
+    ui.app.online().sync();
+    assert_eq!(ui.online().get_banner_text(), "Reconnexion… 35 s");
+    // the next attempt of the same outage does not restart the count
+    ui.app
+        .online()
+        .deliver_event(boussole::net::NetEvent::Reconnecting {
+            attempt: 3,
+            give_up_at: t0 + Duration::from_secs(60),
+        });
+    assert_eq!(ui.online().get_banner_text(), "Reconnexion… 35 s");
+    // past the deadline the last attempt is still running: no "0 s"
+    offset.set(Duration::from_secs(63));
+    ui.app.online().sync();
+    assert_eq!(
+        ui.online().get_banner_text(),
+        "Reconnexion… dernière tentative"
+    );
+}
+
 // --- end of round and of the match ------------------------------------------------------------
 
 #[test]

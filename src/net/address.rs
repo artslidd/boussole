@@ -8,8 +8,6 @@ use std::fmt;
 
 /// Where a server listens when the player gives a host without a port.
 pub const DEFAULT_PORT: u16 = 7878;
-/// Default address offered in the join form.
-pub const DEFAULT_ADDRESS: &str = "ws://localhost:7878/ws";
 
 /// Why an address could not be understood.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,7 +156,7 @@ mod tests {
 
     #[test]
     fn ws_and_wss_urls_are_kept() {
-        assert_eq!(ok("ws://localhost:7878/ws"), DEFAULT_ADDRESS);
+        assert_eq!(ok("ws://localhost:7878/ws"), "ws://localhost:7878/ws");
         assert_eq!(ok("wss://jeu.example.org/ws"), "wss://jeu.example.org/ws");
         assert_eq!(ok("WS://Host:1234/ws"), "ws://Host:1234/ws");
         // a custom path is the player's business

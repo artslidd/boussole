@@ -49,6 +49,8 @@ struct Studio {
     headless: Headless,
     app: App,
     out: PathBuf,
+    /// The scripted clock's start and how far it has moved.
+    t0: Instant,
     offset: Rc<Cell<Duration>>,
 }
 
@@ -67,6 +69,7 @@ impl Studio {
             headless,
             app,
             out,
+            t0,
             offset,
         })
     }
@@ -87,6 +90,11 @@ impl Studio {
     fn send(&self, msg: ServerMsg) {
         self.app.online().deliver(msg);
         self.headless.settle();
+    }
+
+    /// The scripted clock now.
+    fn now(&self) -> Instant {
+        self.t0 + self.offset.get()
     }
 
     /// Let time pass on the scripted clock.
@@ -554,9 +562,10 @@ fn main() -> Result<()> {
             progress(5, 4, false, false),
         ],
     );
-    s.app
-        .online()
-        .deliver_event(NetEvent::Reconnecting { attempt: 3 });
+    s.app.online().deliver_event(NetEvent::Reconnecting {
+        attempt: 3,
+        give_up_at: s.now() + Duration::from_secs(60),
+    });
     s.headless.settle();
     s.elapse(Duration::from_secs(9));
     s.shoot("15-reconnecting.png")?;

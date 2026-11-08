@@ -208,7 +208,6 @@ fn coop_input_is_disabled_when_it_is_not_my_turn_and_says_why() {
         "the explanation names who is playing: {}",
         round.input.message
     );
-    assert!(!view::can_guess(&state, t.at(10)));
 }
 
 #[test]
@@ -219,7 +218,6 @@ fn coop_input_is_enabled_on_my_turn_and_the_banner_calls_me() {
     assert!(round.input.enabled);
     assert!(round.my_turn);
     assert_eq!(round.banner, "À toi de jouer !");
-    assert!(view::can_guess(&state, t.at(10)));
 }
 
 #[test]
@@ -295,7 +293,7 @@ fn coop_input_is_disabled_while_reconnecting_even_on_my_turn() {
     let state = set_link(
         state,
         boussole::online::Link::Reconnecting {
-            since: t.at(100),
+            give_up_at: t.at(60_100),
             attempt: 1,
         },
     );
@@ -676,17 +674,17 @@ fn the_screen_follows_the_match_from_menu_to_final_ranking_and_back() {
 }
 
 #[test]
-fn leaving_the_room_returns_to_the_menu() {
+fn without_a_room_the_menu_is_shown() {
     let t = T::new();
     let mut state = lobby(1, Mode::Course, Difficulty::Facile, three_players(), &t);
-    state.leave_room_locally();
+    state.room = None;
     assert_eq!(view::screen(&state, t.at(1)), Screen::Menu);
 }
 
 // --- banner ------------------------------------------------------------------------------------
 
 #[test]
-fn the_banner_counts_down_the_reconnect_window_and_then_gives_up() {
+fn the_banner_counts_down_to_the_deadline_the_net_layer_gave_and_then_gives_up() {
     let t = T::new();
     let state = lobby(1, Mode::Course, Difficulty::Facile, three_players(), &t);
     assert_eq!(view::banner(&state, t.at(0)), None);
@@ -694,7 +692,7 @@ fn the_banner_counts_down_the_reconnect_window_and_then_gives_up() {
     let state = set_link(
         state,
         boussole::online::Link::Reconnecting {
-            since: t.at(1_000),
+            give_up_at: t.at(61_000),
             attempt: 3,
         },
     );
@@ -705,6 +703,23 @@ fn the_banner_counts_down_the_reconnect_window_and_then_gives_up() {
             assert!(text.contains("50"), "{text}");
         }
         other => panic!("expected a reconnecting banner, got {other:?}"),
+    }
+    // part of a second left still reads 1 s, never 0 s
+    match view::banner(&state, t.at(60_500)) {
+        Some(Banner::Reconnecting { seconds_left, .. }) => assert_eq!(seconds_left, 1),
+        other => panic!("{other:?}"),
+    }
+    // Past the deadline the last attempt may still be running (a connection attempt takes up to
+    // 8 s): say so instead of "encore 0 s", for as long as it lasts.
+    for at in [61_000, 64_000, 69_000] {
+        match view::banner(&state, t.at(at)) {
+            Some(Banner::Reconnecting { text, seconds_left }) => {
+                assert_eq!(seconds_left, 0);
+                assert!(text.contains("dernière tentative"), "{text}");
+                assert!(!text.contains(" 0 s"), "{text}");
+            }
+            other => panic!("expected a reconnecting banner at {at} ms, got {other:?}"),
+        }
     }
     let state = set_link(state, boussole::online::Link::Lost);
     match view::banner(&state, t.at(70_000)) {

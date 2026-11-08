@@ -9,8 +9,6 @@ use boussole_protocol::{
 };
 use std::time::{Duration, Instant};
 
-/// How long the client keeps trying to get its connection back (the server holds the slot 60 s).
-pub const RECONNECT_WINDOW: Duration = Duration::from_secs(60);
 /// Below this much time left the clock is flagged as urgent.
 const URGENT_BELOW: Duration = Duration::from_secs(10);
 
@@ -67,13 +65,18 @@ pub enum Banner {
 
 pub fn banner(state: &OnlineState, now: Instant) -> Option<Banner> {
     match state.link {
-        Link::Reconnecting { since, .. } => {
-            let elapsed = now.saturating_duration_since(since);
-            let seconds_left = RECONNECT_WINDOW.saturating_sub(elapsed).as_secs();
-            Some(Banner::Reconnecting {
-                text: format!("Reconnexion… encore {seconds_left} s avant d’abandonner"),
-                seconds_left,
-            })
+        Link::Reconnecting { give_up_at, .. } => {
+            // Whole seconds, rounded up: part of a second left still reads 1 s.
+            let left = give_up_at.saturating_duration_since(now);
+            let seconds_left = left.as_secs() + u64::from(left.subsec_nanos() > 0);
+            // Past the deadline the last attempt can still be running (it may take several
+            // seconds to time out): say so instead of counting "encore 0 s".
+            let text = if seconds_left == 0 {
+                "Reconnexion… dernière tentative en cours".to_owned()
+            } else {
+                format!("Reconnexion… encore {seconds_left} s avant d’abandonner")
+            };
+            Some(Banner::Reconnecting { text, seconds_left })
         }
         Link::Lost => Some(Banner::Lost {
             text: "Connexion perdue".to_owned(),
@@ -534,11 +537,6 @@ fn input_view(
             }
         }
     }
-}
-
-/// Can the player send a guess right now?
-pub fn can_guess(state: &OnlineState, now: Instant) -> bool {
-    round(state, now).is_some_and(|r| r.input.enabled)
 }
 
 // --- end of round ------------------------------------------------------------------------------

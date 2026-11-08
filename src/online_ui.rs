@@ -742,16 +742,17 @@ impl OnlineUi {
     fn on_net_event(&self, event: NetEvent) {
         match event {
             NetEvent::Msg(msg) => self.on_server_msg(msg),
-            NetEvent::Reconnecting { attempt } => {
-                let now = self.now();
+            NetEvent::Reconnecting {
+                attempt,
+                give_up_at,
+            } => {
                 let mut core = self.inner.core.borrow_mut();
-                let since = match core.state.link {
-                    Link::Reconnecting { since, .. } => since,
-                    _ => now,
-                };
                 core.state = set_link(
                     std::mem::take(&mut core.state),
-                    Link::Reconnecting { since, attempt },
+                    Link::Reconnecting {
+                        give_up_at,
+                        attempt,
+                    },
                 );
                 core.pending = None;
             }
@@ -930,7 +931,6 @@ impl OnlineUi {
                 send_via(&mut core.sent, net.as_ref(), ClientMsg::LeaveRoom);
             }
             core.next_session(); // late events of the old connection are dropped
-            core.state.leave_room_locally();
             core.state = OnlineState::new();
             core.stage = Stage::Menu;
             core.intent = None;
@@ -1411,7 +1411,14 @@ impl OnlineUi {
         match view::banner(&core.state, now) {
             Some(Banner::Reconnecting { seconds_left, .. }) => {
                 online.set_banner_kind(BannerKind::Reconnecting);
-                online.set_banner_text(format!("Reconnexion… {seconds_left} s").into());
+                online.set_banner_text(
+                    if seconds_left == 0 {
+                        "Reconnexion… dernière tentative".to_owned()
+                    } else {
+                        format!("Reconnexion… {seconds_left} s")
+                    }
+                    .into(),
+                );
             }
             Some(Banner::Lost { text }) => {
                 online.set_banner_kind(BannerKind::Lost);

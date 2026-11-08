@@ -243,7 +243,7 @@ fn a_dropped_socket_is_reopened_with_the_resume_token() {
     server.drop_connection();
     assert!(matches!(
         client.next(),
-        NetEvent::Reconnecting { attempt: 1 }
+        NetEvent::Reconnecting { attempt: 1, .. }
     ));
 
     let (again_id, again_token, resumed) = welcome_of(client.next_skipping_reconnecting());
@@ -310,13 +310,73 @@ fn it_keeps_retrying_with_a_backoff_until_the_server_is_back() {
 
     let mut attempts = 0;
     while attempts < 3 {
-        if let NetEvent::Reconnecting { attempt } = client.next() {
+        if let NetEvent::Reconnecting { attempt, .. } = client.next() {
             attempts = attempt;
         }
     }
     server.refuse_connections(false);
     let (_, _, resumed) = welcome_of(client.next_skipping_reconnecting());
     assert!(resumed);
+}
+
+#[test]
+fn reconnecting_events_tell_when_the_client_will_give_up() {
+    let server = MockServer::start();
+    let mut config = fast(&server.url);
+    config.reconnect_window = Duration::from_millis(600);
+    let client = connect(config);
+    welcome_of(client.next());
+    server.refuse_connections(true);
+    let dropped = std::time::Instant::now();
+    server.drop_connection();
+
+    let mut deadlines = Vec::new();
+    loop {
+        match client.next() {
+            NetEvent::Reconnecting { give_up_at, .. } => deadlines.push(give_up_at),
+            NetEvent::Failed(NetError::ConnectionLost) => break,
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    assert!(
+        deadlines.len() >= 2,
+        "several attempts: {}",
+        deadlines.len()
+    );
+    let first = deadlines[0];
+    assert!(
+        deadlines.iter().all(|d| *d == first),
+        "one deadline for the whole outage, not one per attempt"
+    );
+    // the window of the config, counted from the drop (not a constant of the screen)
+    assert!(first >= dropped + Duration::from_millis(600), "{first:?}");
+    assert!(first <= dropped + Duration::from_secs(3), "{first:?}");
+    assert!(
+        std::time::Instant::now() >= first,
+        "it gave up at the deadline it announced, not before"
+    );
+}
+
+#[test]
+fn a_second_outage_gets_its_own_deadline() {
+    let server = MockServer::start();
+    let mut config = fast(&server.url);
+    config.reconnect_window = Duration::from_secs(30);
+    let client = connect(config);
+    welcome_of(client.next());
+    server.drop_connection();
+    let first = match client.next() {
+        NetEvent::Reconnecting { give_up_at, .. } => give_up_at,
+        other => panic!("unexpected {other:?}"),
+    };
+    welcome_of(client.next_skipping_reconnecting());
+    std::thread::sleep(Duration::from_millis(200));
+    server.drop_connection();
+    let second = match client.next() {
+        NetEvent::Reconnecting { give_up_at, .. } => give_up_at,
+        other => panic!("unexpected {other:?}"),
+    };
+    assert!(second > first, "counted from the second drop");
 }
 
 #[test]
@@ -386,7 +446,7 @@ fn a_silent_socket_is_treated_as_dropped() {
     welcome_of(client.next());
     assert!(matches!(
         client.next(),
-        NetEvent::Reconnecting { attempt: 1 }
+        NetEvent::Reconnecting { attempt: 1, .. }
     ));
     let (_, _, resumed) = welcome_of(client.next_skipping_reconnecting());
     assert!(resumed);
@@ -425,7 +485,7 @@ fn a_host_app_that_exited_without_a_goodbye_is_given_up_on_as_soon_as_its_port_r
     drop(server); // the listener goes away; the connection ends in a bare EOF
     assert!(matches!(
         client.next(),
-        NetEvent::Reconnecting { attempt: 1 }
+        NetEvent::Reconnecting { attempt: 1, .. }
     ));
     let started = std::time::Instant::now();
     assert_eq!(
@@ -452,7 +512,7 @@ fn a_tunnel_whose_host_is_gone_is_given_up_on_like_a_refused_port() {
         server.drop_connection();
         assert!(matches!(
             client.next(),
-            NetEvent::Reconnecting { attempt: 1 }
+            NetEvent::Reconnecting { attempt: 1, .. }
         ));
         let started = std::time::Instant::now();
         assert_eq!(
@@ -486,7 +546,7 @@ fn a_visitor_over_the_per_address_cap_is_told_so_and_it_is_retried_while_reconne
     server.drop_connection();
     assert!(matches!(
         client.next(),
-        NetEvent::Reconnecting { attempt: 1 }
+        NetEvent::Reconnecting { attempt: 1, .. }
     ));
     std::thread::sleep(Duration::from_millis(150));
     server.answer_with_http_status(None);
@@ -504,7 +564,7 @@ fn a_gateway_hiccup_is_retried_because_the_game_may_well_still_be_there() {
     server.drop_connection();
     assert!(matches!(
         client.next(),
-        NetEvent::Reconnecting { attempt: 1 }
+        NetEvent::Reconnecting { attempt: 1, .. }
     ));
     std::thread::sleep(Duration::from_millis(150));
     server.answer_with_http_status(None);
@@ -539,7 +599,7 @@ fn other_close_codes_are_still_treated_as_a_network_blip_and_retried() {
     server.close_connection_with_code(1011);
     assert!(matches!(
         client.next(),
-        NetEvent::Reconnecting { attempt: 1 }
+        NetEvent::Reconnecting { attempt: 1, .. }
     ));
     let (_, _, resumed) = welcome_of(client.next_skipping_reconnecting());
     assert!(resumed);
@@ -565,7 +625,7 @@ fn a_full_server_while_reconnecting_is_just_retried_until_there_is_room() {
     server.drop_connection();
     assert!(matches!(
         client.next(),
-        NetEvent::Reconnecting { attempt: 1 }
+        NetEvent::Reconnecting { attempt: 1, .. }
     ));
     std::thread::sleep(Duration::from_millis(150));
     server.answer_with_http_status(None);

@@ -7,7 +7,7 @@ use crate::online::text;
 use boussole_protocol::ErrorCode;
 use std::fmt;
 
-pub use address::{AddressError, DEFAULT_ADDRESS, normalize_address};
+pub use address::{AddressError, normalize_address};
 pub use client::{NetConfig, NetEvent, NetHandle};
 
 /// Why a connection failed for good.

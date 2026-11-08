@@ -24,7 +24,8 @@ pub enum Link {
     /// Connected and identified (`welcome` received).
     Online,
     /// The socket dropped; the client is retrying with its resume token.
-    Reconnecting { since: Instant, attempt: u32 },
+    /// `give_up_at` comes from the net layer (see `NetEvent::Reconnecting`).
+    Reconnecting { give_up_at: Instant, attempt: u32 },
     /// The client gave up (or was closed): nothing more will arrive.
     Lost,
 }
@@ -188,8 +189,6 @@ pub struct OnlineState {
     pub last_error: Option<ErrorCode>,
     /// The final ranking, once the match is over and until the player returns to the lobby.
     pub ended: Option<MatchEnd>,
-    /// Code of the room I just left: late snapshots for it are ignored.
-    left: Option<String>,
 }
 
 impl Default for OnlineState {
@@ -207,7 +206,6 @@ impl OnlineState {
             notice: None,
             last_error: None,
             ended: None,
-            left: None,
         }
     }
 
@@ -219,19 +217,8 @@ impl OnlineState {
         }
     }
 
-    /// Drop the room at once after `leave_room` (the server sends no acknowledgement); late
-    /// snapshots of that room are then ignored.
-    pub fn leave_room_locally(&mut self) {
-        if let Some(room) = self.room.take() {
-            self.left = Some(room.code);
-        }
-        self.ended = None;
-    }
-
-    /// The player is about to create or join a room: forget the stale error and accept snapshots
-    /// for any room (including the one just left).
+    /// The player is about to create or join a room: forget the stale error.
     pub fn begin_room_request(&mut self) {
-        self.left = None;
         self.notice = None;
         self.last_error = None;
     }
@@ -251,11 +238,6 @@ impl OnlineState {
         if let Some(ended) = &mut self.ended {
             ended.show_at = now;
         }
-    }
-
-    pub fn clear_notice(&mut self) {
-        self.notice = None;
-        self.last_error = None;
     }
 }
 
@@ -367,9 +349,6 @@ fn apply_error(state: &mut OnlineState, code: ErrorCode) {
 }
 
 fn apply_snapshot(state: &mut OnlineState, snapshot: RoomSnapshot, now: Instant) {
-    if state.left.as_deref() == Some(snapshot.code.as_str()) {
-        return; // a late snapshot of the room we just left
-    }
     let previous = match state.room.take() {
         Some(room) if room.code == snapshot.code => Some(room),
         _ => {

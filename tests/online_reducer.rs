@@ -72,7 +72,7 @@ fn an_unresumed_welcome_while_in_a_room_means_the_room_is_gone() {
     let state = set_link(
         state,
         Link::Reconnecting {
-            since: c.t(10),
+            give_up_at: c.t(60_010),
             attempt: 2,
         },
     );
@@ -92,7 +92,7 @@ fn a_resumed_welcome_keeps_the_room_until_the_snapshot_replaces_it() {
     let state = set_link(
         state,
         Link::Reconnecting {
-            since: c.t(10),
+            give_up_at: c.t(60_010),
             attempt: 1,
         },
     );
@@ -128,26 +128,6 @@ fn a_snapshot_creates_the_room_and_the_next_one_replaces_it() {
     let room = state.room.as_ref().unwrap();
     assert_eq!(room.players.len(), 3);
     assert!(room.players[1].connected);
-}
-
-#[test]
-fn a_stale_snapshot_of_a_room_just_left_is_ignored() {
-    let c = Clockwork::new();
-    let mut state = apply(welcomed(&c), fixture!("room_snapshot_lobby"), c.t(1));
-    state.leave_room_locally();
-    assert!(state.room.is_none(), "dropped at once, no acknowledgement");
-    let state = apply(state, fixture!("room_snapshot_lobby"), c.t(2));
-    assert!(state.room.is_none(), "same code as the room we left: stale");
-}
-
-#[test]
-fn rejoining_the_room_just_left_is_possible_after_a_new_request() {
-    let c = Clockwork::new();
-    let mut state = apply(welcomed(&c), fixture!("room_snapshot_lobby"), c.t(1));
-    state.leave_room_locally();
-    state.begin_room_request();
-    let state = apply(state, fixture!("room_snapshot_lobby"), c.t(2));
-    assert_eq!(state.room.as_ref().map(|r| r.code.as_str()), Some("K7QX2"));
 }
 
 #[test]

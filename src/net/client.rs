@@ -74,7 +74,13 @@ pub enum NetEvent {
     /// restored one).
     Msg(ServerMsg),
     /// The socket dropped; attempt `attempt` (1-based) to get it back is about to start.
-    Reconnecting { attempt: u32 },
+    /// `give_up_at` is when the client stops starting new attempts (the same for every attempt
+    /// of one outage): the drop plus [`NetConfig::reconnect_window`]. The attempt running then
+    /// may take a few seconds more to end.
+    Reconnecting {
+        attempt: u32,
+        give_up_at: std::time::Instant,
+    },
     /// Nothing more will happen: the connection could not be opened, was refused, or was lost
     /// for good.
     Failed(NetError),
@@ -131,14 +137,6 @@ impl NetHandle {
     /// Has the network thread ended (after [`NetHandle::close`], or a terminal failure)?
     pub fn is_finished(&self) -> bool {
         self.thread.as_ref().is_none_or(JoinHandle::is_finished)
-    }
-
-    /// [`NetHandle::close`], then wait for the thread to end (tests, clean shutdown).
-    pub fn close_and_wait(mut self) {
-        self.close();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
     }
 }
 
@@ -211,18 +209,22 @@ async fn run(config: NetConfig, mut commands: mpsc::UnboundedReceiver<Command>, 
         drop(socket);
 
         // Retry until the window is over.
-        let since = Instant::now();
+        // The wall clock, not tokio's: it is handed to the UI, which compares it with its own.
+        let give_up_at = std::time::Instant::now() + config.reconnect_window;
         let mut attempt = 0u32;
         let mut pause = config.backoff_initial;
         socket = loop {
             attempt += 1;
-            sink(NetEvent::Reconnecting { attempt });
+            sink(NetEvent::Reconnecting {
+                attempt,
+                give_up_at,
+            });
             if wait_or_close(&mut commands, pause).await {
                 sink(NetEvent::Closed);
                 return;
             }
             pause = (pause * 2).min(config.backoff_max);
-            if since.elapsed() >= config.reconnect_window {
+            if std::time::Instant::now() >= give_up_at {
                 sink(NetEvent::Failed(NetError::ConnectionLost));
                 return;
             }
