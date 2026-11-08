@@ -105,7 +105,9 @@ impl BoardInput {
 
 /// Compute everything the board draws for a canvas of `width × height` logical pixels.
 pub(crate) fn compute_board(width: f32, height: f32, input: &BoardInput) -> BoardView {
-    if width < 1.0 || height < 1.0 || input.hints.is_empty() {
+    // No hints is only legitimate online, for a player who resumed during an intermission: the
+    // dial then still shows the revealed city, without arrows.
+    if width < 1.0 || height < 1.0 || (input.hints.is_empty() && input.revealed.is_none()) {
         return BoardView::default();
     }
     let layout = board::layout_board(f64::from(width), f64::from(height), &input.hints);

@@ -1340,6 +1340,19 @@ fn the_end_of_a_round_reveals_the_city_and_everybodys_results_then_the_next_roun
 }
 
 #[test]
+fn resuming_during_an_intermission_still_shows_the_revealed_city() {
+    // A reconnecting player only gets the result in the snapshot (no hints): the dial still
+    // shows the city, just without arrows.
+    let (ui, server) = joined(course_config(), alice_and_bob());
+    server.send(fixture!("room_snapshot_intermission"));
+    ui.wait("the result", |ui| ui.screen() == OnlineScreen::Result);
+    let view = ui.online().invoke_compute_board(700.0, 330.0, 0);
+    assert!(view.revealed);
+    assert_eq!(view.text, "Besançon");
+    assert_eq!(view.arrows.row_count(), 0);
+}
+
+#[test]
 fn the_final_ranking_comes_after_the_last_result_and_leads_back_to_the_lobby() {
     let (ui, server) = course_round();
     let mut last = match fixture!("round_ended_course") {

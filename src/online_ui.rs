@@ -261,6 +261,7 @@ impl OnlineUi {
             core.hosted = hosted;
         }
         window.global::<Online>().set_active(true);
+        self.start_polling();
         self.sync();
     }
 
@@ -407,19 +408,20 @@ impl OnlineUi {
                 }
             });
         }
+    }
 
-        // The poll: inbox and countdowns.
-        {
-            let inner = self.inner.clone();
-            self.inner
-                .poll
-                .start(slint::TimerMode::Repeated, POLL, move || {
-                    OnlineUi {
-                        inner: inner.clone(),
-                    }
-                    .pump();
-                });
-        }
+    /// The poll: drains the inbox and recomputes the countdowns. It only runs while the online
+    /// mode is on screen (solo mode keeps the event loop asleep), and holds the controller
+    /// weakly so the timer never keeps it alive.
+    fn start_polling(&self) {
+        let weak = Rc::downgrade(&self.inner);
+        self.inner
+            .poll
+            .start(slint::TimerMode::Repeated, POLL, move || {
+                if let Some(inner) = weak.upgrade() {
+                    OnlineUi { inner }.pump();
+                }
+            });
     }
 
     // --- menu ---------------------------------------------------------------------------------
@@ -436,6 +438,7 @@ impl OnlineUi {
             }
         }
         window.global::<Online>().set_active(true);
+        self.start_polling();
         self.sync();
     }
 
@@ -446,6 +449,7 @@ impl OnlineUi {
         };
         self.teardown(false);
         window.global::<Online>().set_active(false);
+        self.inner.poll.stop();
         self.sync();
     }
 
