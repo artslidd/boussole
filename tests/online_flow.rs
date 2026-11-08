@@ -109,6 +109,22 @@ impl Ui {
         self.h.settle();
     }
 
+    /// The whole end of a match has reached the UI: `match_ended` (the ranking exists) and, with
+    /// `back_in_lobby`, the lobby snapshot that follows it. The server sends them one after the
+    /// other, so seeing the last result on screen does not mean they arrived: Enter pressed
+    /// before `match_ended` is processed has no ranking to skip to.
+    fn wait_for_match_end(&self, back_in_lobby: bool) {
+        self.wait("the end of the match", |ui| {
+            let state = ui.app.online().state();
+            state.ended.is_some()
+                && (!back_in_lobby
+                    || state
+                        .room
+                        .as_ref()
+                        .is_some_and(|room| room.phase == boussole_protocol::RoomPhase::Lobby))
+        });
+    }
+
     /// The next message the server receives, while the UI keeps running (its poll timer drains
     /// the network inbox: a blocking wait on the server alone would never let it send anything).
     fn next_msg(&self, server: &MockServer) -> ClientMsg {
@@ -1534,6 +1550,7 @@ fn eight_players_fit_in_the_final_ranking_at_the_minimum_window_size() {
     }));
     server.send(lobby_msg(course_config(), eight_players()));
     ui.wait("the last result", |ui| ui.screen() == OnlineScreen::Result);
+    ui.wait_for_match_end(true);
     ui.key(Key::Return);
     assert_eq!(ui.screen(), OnlineScreen::Podium);
     assert_eq!(ui.online().get_ranking().row_count(), 8);
@@ -1981,6 +1998,7 @@ fn the_final_ranking_comes_after_the_last_result_and_leads_back_to_the_lobby() {
     server.send(fixture!("match_ended"));
     server.send(lobby_msg(course_config(), alice_and_bob()));
     ui.wait("the last result", |ui| ui.screen() == OnlineScreen::Result);
+    ui.wait_for_match_end(true);
     assert!(ui.online().get_last_round());
     assert!(
         ui.online()
@@ -2037,6 +2055,7 @@ fn the_coop_final_shows_the_team_score() {
         ],
     }));
     ui.wait("the last result", |ui| ui.screen() == OnlineScreen::Result);
+    ui.wait_for_match_end(false);
     ui.key(Key::Return);
     assert_eq!(ui.screen(), OnlineScreen::Podium);
     assert_eq!(ui.online().get_podium_title(), "Score d’équipe");
