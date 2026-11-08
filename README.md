@@ -83,10 +83,24 @@ every city, autocomplete at 800 × 600, the duplicate-guess notice, Facile at 80
 
 ## Project layout
 
-- `src/` — the library `boussole`:
-  - **core, no GUI types:** `cities` (embedded dataset of 120 cities), `geo` (distance,
-    bearing, compass), `search` (name normalization and autocomplete), `game` (difficulty,
-    hints, rounds, guesses);
+A cargo workspace. The **root package `boussole` is the desktop client** (so `cargo run
+--release` still launches the game); the crates below it are shared with the multiplayer
+server being built (online rooms in two modes, *Course* and *Coopération*).
+
+| Crate | What it is |
+|---|---|
+| `boussole` (root) | the Slint desktop client: solo game today, online mode to come |
+| [`crates/boussole-core`](crates/boussole-core) | GUI-free, dependency-free kernel: `cities` (embedded dataset of 120 cities), `geo`, `search`, `game`; also `dataset_fingerprint()` / `DATASET_VERSION` |
+| [`crates/boussole-protocol`](crates/boussole-protocol) | the wire protocol: message types, JSON codec, validation helpers, golden fixtures |
+| [`crates/boussole-server`](crates/boussole-server) | the multiplayer server; for now only the pure, IO-free **match engine** (`engine/`: rooms, Course and Coopération rules, timers, scoring, resume) — networking comes next |
+
+The protocol is specified in [`docs/protocol.md`](docs/protocol.md): transport, handshake,
+every message with a JSON example, state diagrams, timers, scoring, error codes, versioning.
+`boussole-server` never depends on Slint (`cargo tree -p boussole-server | grep -c slint` is 0).
+
+- `src/` — the library `boussole` (the client). The core modules `cities`, `geo`, `search`
+  and `game` live in `crates/boussole-core` and are re-exported here (`boussole::game::Round`
+  works as before). It adds:
   - **presentation logic, still GUI-free and unit-tested:** `board` (arrow and label geometry,
     French texts), `session` (Setup → Playing → Ended state machine, autocomplete state),
     `text` (label measurement with the embedded font);
@@ -104,29 +118,40 @@ every city, autocomplete at 800 × 600, the duplicate-guess notice, Facile at 80
 ## Tests and quality gate
 
 ```sh
-cargo test                   # unit tests, layout sweeps, end-to-end UI tests
-cargo test --lib board::     # one module
+cargo test --workspace                  # every crate: unit tests, layout sweeps, UI and engine tests
+cargo test -p boussole-server           # the match engine only (fast, no GUI)
+cargo test -p boussole-protocol         # codec + golden JSON fixtures (+ docs/protocol.md check)
+cargo test -p boussole --lib board::    # one module of the client
 
 # full gate, must be green before merging:
-cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test && cargo build --release
+cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && cargo build --workspace --release
+
+# after an intentional wire-format change, regenerate the golden fixtures, review the diff,
+# and update docs/protocol.md (a test checks that it quotes every fixture verbatim):
+BLESS=1 cargo test -p boussole-protocol --test golden
 
 cargo run --release --example screenshots   # regenerate docs/screenshots/
 cargo run --release --example real_window -- /tmp/real  # opens the real window for ~2 s
 ```
+
+The engine tests are deterministic (injected clock and randomness): they cover the handshake,
+rooms, both game modes, timers, scoring and resume, check on 200 simulated matches that the
+secret city never appears in a message before `round_ended` (and that Difficile never sends hint
+distances), and throw more than 10 000 random messages at the engine.
 
 The UI tests run without a display: `boussole::headless` installs a Slint platform backed by the
 software renderer, injects key presses and clicks, and renders to memory. Mouse targets are
 found through accessible labels (the tests use Slint's `i-slint-backend-testing` element
 lookup, which is why `build.rs` enables debug info).
 
-## Hint rules (see `src/game.rs`)
+## Hint rules (see `crates/boussole-core/src/game.rs`)
 
 Each round has exactly 5 hints from the `reference` cities, never the secret, 50–700 km away,
 with bearings at least 40° apart (35° minimum, sorted clockwise). Secrets on the edge of France
 (Ajaccio, Bastia, Porto-Vecchio, Brest, Quimper, Calais, Dunkerque, Strasbourg, Bayonne) have
 all their neighbours in a narrow sector, so the spread and/or distance window is relaxed
 deterministically (down to 15° and 1 000 km for Porto-Vecchio); the exact floors are documented
-and tested in `game::tests::RELAXED`. The board layout (`src/board.rs`) keeps every label
+and tested in `game::tests::RELAXED` (in `boussole-core`). The board layout (`src/board.rs`) keeps every label
 readable and inside the canvas down to a 15° gap: arrow *directions* are always exact, only a
 label may slide aside along the circle to make room for its neighbour.
 

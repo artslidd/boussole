@@ -8,3 +8,6 @@ description = "Boussole multiplayer server: pure match engine (networking is add
 [dependencies]
 boussole-core.workspace = true
 boussole-protocol.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
