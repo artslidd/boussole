@@ -115,9 +115,10 @@ From the start screen choose **Jouer en ligne**, type a **Pseudo** (1 to 16 char
 * **Errors** are in French and say what to do: *Serveur injoignable*, *Version incompatible —
   mettez le jeu à jour*, *Le port est déjà utilisé*, *Tunnel indisponible*, *Salle pleine* (a server
   over its connection cap), a full or unknown room, a nickname already taken… When the host
-  closes the game (the server goes away, WebSocket close code 1001) everybody is sent back to the
-  menu with *L’hôte a fermé la partie*: the client does not try to reconnect to a game that was
-  closed on purpose. If `cloudflared` is missing the app explains how to install it and
+  closes the game (the server goes away: WebSocket close code 1001, or the host's port stops
+  accepting connections right after a bare disconnect) everybody is sent back to the menu with
+  *L’hôte a fermé la partie*: the client does not keep retrying for a game that cannot come back.
+  A plain network drop, on the other hand, keeps retrying for 60 s. If `cloudflared` is missing the app explains how to install it and
   offers the local network instead.
 * **Keyboard only** works from the start screen to the guesses: `Tab` moves between the nickname,
   the host/join forms and the buttons, `←` `→` change a choice, `Enter` confirms, and in a round

@@ -357,7 +357,10 @@ fn it_gives_up_when_the_reconnect_window_is_over() {
 fn a_server_restart_on_the_same_port_gives_an_unresumed_welcome() {
     let first = MockServer::start();
     let port = first.port;
-    let client = connect(fast(&first.url));
+    let mut config = fast(&first.url);
+    // the restart must be up before the first retry: a port that refuses ends the game
+    config.backoff_initial = Duration::from_millis(400);
+    let client = connect(config);
     welcome_of(client.next());
     drop(first);
     // restart (fresh token table) on the same port; give the OS a moment to release it
@@ -407,6 +410,50 @@ fn a_server_shutdown_close_1001_means_the_host_closed_the_game_and_is_not_retrie
         NetError::ServerClosed.to_string(),
         "L’hôte a fermé la partie."
     );
+}
+
+#[test]
+fn a_host_app_that_exited_without_a_goodbye_is_given_up_on_as_soon_as_its_port_refuses() {
+    // The host process can exit right after `shutdown()` before the 1001 reaches the guests: they
+    // see a bare EOF. A network blip never makes a port *refuse* connections, a gone host does,
+    // and then no amount of retrying brings the game back.
+    let server = MockServer::start();
+    let mut config = fast(&server.url);
+    config.reconnect_window = Duration::from_secs(30); // far longer than this test waits
+    let client = connect(config);
+    welcome_of(client.next());
+    drop(server); // the listener goes away; the connection ends in a bare EOF
+    assert!(matches!(
+        client.next(),
+        NetEvent::Reconnecting { attempt: 1 }
+    ));
+    let started = std::time::Instant::now();
+    assert_eq!(
+        client.next_skipping_reconnecting(),
+        NetEvent::Failed(NetError::ServerClosed)
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "gave up at once, not after the window"
+    );
+}
+
+#[test]
+fn a_first_connection_to_a_closed_port_is_still_just_unreachable() {
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let client = connect(fast(&format!("ws://127.0.0.1:{port}/ws")));
+    match client.next() {
+        NetEvent::Failed(error) => {
+            assert!(
+                error.to_string().starts_with("Serveur injoignable"),
+                "{error}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]

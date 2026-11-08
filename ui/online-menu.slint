@@ -111,7 +111,7 @@ export component OnlineMenu inherits Rectangle {
                         }
 
                         Text {
-                            text: Online.host-choice == HostChoice.lan ? "macOS peut demander d’autoriser les connexions entrantes : acceptez, sinon vos amis ne pourront pas vous rejoindre." : "Adresse publique temporaire, valable le temps de la partie. Nécessite cloudflared (gratuit).";
+                            text: Online.host-choice == HostChoice.lan ? "macOS peut demander d’autoriser les connexions entrantes : acceptez, sinon vos amis ne pourront pas vous rejoindre." : "Adresse publique temporaire, valable le temps de la partie, qui peut mettre quelques secondes à répondre. Nécessite cloudflared (gratuit).";
                             font-size: 13px;
                             color: Theme.ink-soft;
                             wrap: word-wrap;

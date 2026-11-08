@@ -148,6 +148,23 @@ type Sink = Arc<dyn Fn(NetEvent) + Send + Sync>;
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+/// Why [`open`] failed. `refused` tells a port with nobody listening (the TCP connection was
+/// refused) from every other failure: while reconnecting, a refusal means the server process is
+/// gone and the game with it, whereas a network blip never refuses.
+struct OpenError {
+    error: NetError,
+    refused: bool,
+}
+
+impl From<NetError> for OpenError {
+    fn from(error: NetError) -> Self {
+        Self {
+            error,
+            refused: false,
+        }
+    }
+}
+
 /// Why a connected session ended.
 enum Ended {
     /// The player closed it (or dropped the handle).
@@ -169,8 +186,8 @@ async fn run(config: NetConfig, mut commands: mpsc::UnboundedReceiver<Command>, 
             sink(NetEvent::Msg(welcome));
             (socket, token)
         }
-        Err(error) => {
-            sink(NetEvent::Failed(error));
+        Err(failure) => {
+            sink(NetEvent::Failed(failure.error));
             return;
         }
     };
@@ -212,9 +229,18 @@ async fn run(config: NetConfig, mut commands: mpsc::UnboundedReceiver<Command>, 
                     sink(NetEvent::Msg(welcome));
                     break socket;
                 }
+                // Nobody listens any more: the server process is gone (a host app that quit
+                // without its 1001 reaching us), and the game cannot come back.
+                Err(OpenError { refused: true, .. }) => {
+                    sink(NetEvent::Failed(NetError::ServerClosed));
+                    return;
+                }
                 // The server was upgraded under us, refuses us, or said it is going away:
                 // retrying cannot help. (A full server, 503, may have room later: keep trying.)
-                Err(error @ (NetError::Rejected(_) | NetError::ServerClosed)) => {
+                Err(OpenError {
+                    error: error @ (NetError::Rejected(_) | NetError::ServerClosed),
+                    ..
+                }) => {
                     sink(NetEvent::Failed(error));
                     return;
                 }
@@ -252,7 +278,7 @@ fn install_tls_provider() {
 async fn open(
     config: &NetConfig,
     resume_token: Option<&str>,
-) -> Result<(Socket, ServerMsg, String), NetError> {
+) -> Result<(Socket, ServerMsg, String), OpenError> {
     install_tls_provider();
     let attempt = async {
         let ws_config = WebSocketConfig::default()
@@ -267,16 +293,24 @@ async fn open(
         .map_err(|error| match error {
             // Over the connection cap: the server answers before the WebSocket upgrade.
             tokio_tungstenite::tungstenite::Error::Http(response) if response.status() == 503 => {
-                NetError::ServerFull
+                OpenError::from(NetError::ServerFull)
             }
-            other => NetError::Unreachable(other.to_string()),
+            tokio_tungstenite::tungstenite::Error::Io(io)
+                if io.kind() == std::io::ErrorKind::ConnectionRefused =>
+            {
+                OpenError {
+                    error: NetError::Unreachable(io.to_string()),
+                    refused: true,
+                }
+            }
+            other => OpenError::from(NetError::Unreachable(other.to_string())),
         })?;
 
         let hello = ClientMsg::hello(config.nickname.clone(), resume_token.map(str::to_owned));
         socket
             .send(Message::text(encode_client(&hello)))
             .await
-            .map_err(|error| NetError::Unreachable(error.to_string()))?;
+            .map_err(|error| OpenError::from(NetError::Unreachable(error.to_string())))?;
 
         loop {
             match socket.next().await {
@@ -288,24 +322,28 @@ async fn open(
                         let token = resume_token.clone();
                         return Ok((socket, welcome, token));
                     }
-                    Ok(ServerMsg::Error { code, .. }) => return Err(NetError::Rejected(code)),
+                    Ok(ServerMsg::Error { code, .. }) => {
+                        return Err(NetError::Rejected(code).into());
+                    }
                     Ok(ServerMsg::Pong) => {}
-                    Ok(_) | Err(_) => return Err(NetError::Protocol),
+                    Ok(_) | Err(_) => return Err(NetError::Protocol.into()),
                 },
                 Some(Ok(Message::Close(frame))) if is_going_away(frame.as_ref()) => {
-                    return Err(NetError::ServerClosed);
+                    return Err(NetError::ServerClosed.into());
                 }
                 Some(Ok(Message::Close(_))) | None => {
-                    return Err(NetError::Unreachable("connexion fermée".into()));
+                    return Err(NetError::Unreachable("connexion fermée".into()).into());
                 }
                 Some(Ok(_)) => {} // ping / pong / binary: not a handshake answer
-                Some(Err(error)) => return Err(NetError::Unreachable(error.to_string())),
+                Some(Err(error)) => {
+                    return Err(NetError::Unreachable(error.to_string()).into());
+                }
             }
         }
     };
     timeout(config.connect_timeout, attempt)
         .await
-        .map_err(|_| NetError::Unreachable("délai dépassé".into()))?
+        .map_err(|_| OpenError::from(NetError::Unreachable("délai dépassé".into())))?
 }
 
 /// Drive one connected socket until the player closes it or it drops.

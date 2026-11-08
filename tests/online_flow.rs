@@ -658,6 +658,37 @@ fn a_tunnel_without_cloudflared_shows_how_to_install_it_and_offers_the_local_net
 }
 
 #[test]
+fn the_menu_fits_the_minimum_window_in_its_tallest_state() {
+    // Internet chosen (the longer explanation) and the cloudflared help showing.
+    let ui = ui(800, 600);
+    ui.app
+        .online()
+        .set_host(Arc::new(FakeHost::failing(HostError::TunnelNotInstalled)));
+    ui.open_menu();
+    ui.fill("Pseudo", "Alice");
+    ui.click(
+        "Internet : tunnel gratuit, sans compte",
+        Some(AccessibleRole::RadioButton),
+    );
+    ui.button("Héberger une partie");
+    ui.wait("the help", |ui| {
+        ui.online().get_help() == MenuHelp::TunnelMissing
+    });
+    for label in [
+        "Héberger une partie",
+        "Rejoindre",
+        "Utiliser le réseau local",
+    ] {
+        let e = ui.element(label, Some(AccessibleRole::Button));
+        let p = e.absolute_position();
+        assert!(
+            p.y + e.size().height <= 600.0 && p.x + e.size().width <= 800.0,
+            "{label:?} is outside the 800×600 window: {p:?}"
+        );
+    }
+}
+
+#[test]
 fn a_port_already_in_use_is_explained() {
     let ui = ui(1000, 760);
     ui.app
@@ -1598,6 +1629,28 @@ fn the_host_closing_the_game_sends_everybody_back_to_the_menu_without_reconnecti
         1,
         "the client did not try to reconnect"
     );
+}
+
+#[test]
+fn a_host_app_that_vanishes_sends_guests_to_the_menu_within_seconds_not_a_minute() {
+    let (ui, server) = joined(course_config(), alice_and_bob());
+    drop(server); // the host's process is gone: bare EOF, then a refused port
+    ui.wait("the menu", |ui| ui.screen() == OnlineScreen::Menu);
+    assert_eq!(ui.online().get_error(), "L’hôte a fermé la partie.");
+    assert_eq!(ui.online().get_banner_kind(), BannerKind::None);
+}
+
+#[test]
+fn if_the_hosts_own_server_goes_away_the_host_is_told_and_everything_is_cleaned_up() {
+    let (ui, server, host) = hosted(HostChoice::Lan);
+    server.close_connection_with_code(1001); // the embedded server stopped under us
+    ui.wait("the menu", |ui| ui.screen() == OnlineScreen::Menu);
+    assert_eq!(
+        ui.online().get_error(),
+        "Le serveur de la partie s’est arrêté."
+    );
+    ui.wait("the host to be stopped", |_| host.stops() == 1);
+    assert!(ui.app.online().hosted().is_none());
 }
 
 #[test]

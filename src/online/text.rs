@@ -8,6 +8,7 @@ pub const ROOM_CLOSED: &str = "La salle a été fermée.";
 pub const SERVER_UNREACHABLE: &str =
     "Serveur injoignable : vérifiez l’adresse, l’hôte et votre connexion.";
 pub const HOST_CLOSED: &str = "L’hôte a fermé la partie.";
+pub const OWN_SERVER_STOPPED: &str = "Le serveur de la partie s’est arrêté.";
 pub const SERVER_FULL: &str =
     "Salle pleine : le serveur n’accepte plus de connexions pour le moment.";
 pub const CANNOT_CREATE_ROOM: &str =

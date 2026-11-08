@@ -673,7 +673,15 @@ impl OnlineUi {
                 if matches!(stage, Stage::Connecting | Stage::Starting)
                     || error == crate::net::NetError::ServerClosed
                 {
-                    self.fail_to_menu(error.to_string(), None);
+                    // When it is the host's own embedded server that stopped, "the host closed
+                    // the game" would read oddly to the host.
+                    let own_server = self.inner.core.borrow().hosted.is_some();
+                    let text = if own_server && error == crate::net::NetError::ServerClosed {
+                        crate::online::text::OWN_SERVER_STOPPED.to_owned()
+                    } else {
+                        error.to_string()
+                    };
+                    self.fail_to_menu(text, None);
                 } else {
                     let mut core = self.inner.core.borrow_mut();
                     core.state = set_link(std::mem::take(&mut core.state), Link::Lost);
