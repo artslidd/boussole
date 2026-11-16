@@ -2312,8 +2312,9 @@ fn the_whole_path_create_lobby_guess_works_with_the_keyboard_only() {
     let server = MockServer::start();
     let host = Arc::new(FakeHost::ok(host_info(&server)));
     ui.app.online().set_host(host.clone());
-    // Start screen: the level picker has the focus; Tab reaches "Nouvelle partie", then
-    // "Jouer en ligne"; Enter opens the online menu.
+    // Start screen: the level picker has the focus; Tab reaches the game choice, then
+    // "Nouvelle partie", then "Jouer en ligne"; Enter opens the online menu.
+    ui.key(Key::Tab);
     ui.key(Key::Tab);
     ui.key(Key::Tab);
     ui.key(Key::Return);

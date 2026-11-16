@@ -1,10 +1,14 @@
 # Boussole — jeu de devinette de villes françaises
 
-A desktop game written in Rust with [Slint](https://slint.dev). The game secretly picks a
+A desktop game written in Rust with [Slint](https://slint.dev). It secretly picks a
 French city and shows it as a **?** in the middle of a compass dial. Five arrows leave the dial
 in the true compass direction of five well-known cities. Type your guesses (with autocomplete):
 each wrong guess tells you how far, and in which direction, the hidden city is. You get six
 tries. The interface is in French.
+
+The start screen also offers a second game, **Flèches** (see [Mode Flèches](#mode-fl%C3%A8ches)):
+a named start city sits in the centre of the dial, and you pick which of four arrows points
+at a named target city — ten questions, score out of ten.
 
 ![The start screen](docs/screenshots/01-start.png)
 
@@ -27,11 +31,40 @@ levels.
 
 Same secret, same seed: only the labels differ. Arrow length never encodes the distance.
 
+## Mode Flèches
+
+The second game, chosen on the start screen (it is remembered for the session, like the
+level; the badge in the header shows both while a game runs).
+
+The dial carries a **named start city** in its centre and the header asks *De « Nancy » vers
+« Perpignan » ?*. **Four numbered arrows** leave the dial — exactly one follows the true
+bearing towards the target city. Click it, or press `1`–`4`. After each answer the correct
+arrow is revealed with its label `Perpignan · 715 km · SO` (name, rounded distance, compass
+point), the played arrow turns green or red, and **Suivant** moves to the next question.
+**Ten questions per game, score out of ten.**
+
+| Level | Arrows | Example |
+|---|---|---|
+| **Facile** | four directions at least 60° apart | a wrong cap is easy to spot |
+| **Difficile** | directions only 25° apart, one lure within 25–45° of the answer | you need to really know your geography |
+
+![Flèches question](docs/screenshots/fleches/03-facile-question.png)
+
+| Right answer (green, reveal label) | Wrong answer (red played, green correct) | Final score and recap |
+|---|---|---|
+| ![Bonne réponse](docs/screenshots/fleches/04-bonne-reponse.png) | ![Raté](docs/screenshots/fleches/05-rate.png) | ![Score](docs/screenshots/fleches/06-score.png) |
+
+The click target of an arrow is generous: the whole board is one click zone and a click aims
+at the **nearest** arrow. The end screen shows the score with the recap of the ten questions
+(origin vers target, check or cross), and the game + level choices for the next game.
+
+![Mode Flèches at 800 × 600](docs/screenshots/fleches/08-question-800x600.png)
+
 ## Run
 
 ```sh
 cargo run --release              # random games
-cargo run --release -- --seed 42 # reproducible games: round k of the session uses seed 42 + k
+cargo run --release -- --seed 42 # reproducible games: round/game k of the session uses seed 42 + k
 ```
 
 Needs a recent stable Rust toolchain. Slint is built with its default winit backend and the
@@ -58,7 +91,7 @@ cargo run --release -p boussole-server -- --tunnel    # + a public wss://….try
 
 ## How to play
 
-1. Pick **Facile** or **Difficile**, then **Nouvelle partie**.
+1. Pick the **game** (Devinette or Flèches), then the level, and press **Nouvelle partie**.
 2. Read the arrows: each one points from the hidden city towards a labelled city. The small
    compass in the corner gives the orientation (N is up).
 3. Type a city name. Suggestions appear to the right of the field (in the history's place, so
@@ -76,11 +109,14 @@ Everything can be done with the keyboard alone, or with the mouse alone.
 
 | Where | Keyboard | Mouse |
 |---|---|---|
-| Start / between rounds | `←` `→` choose the level, `Enter` starts, `Tab` reaches the button | click a level, click **Nouvelle partie** |
+| Start / between rounds | `←` `→` choose the level, `Tab` reaches the game choice, `Enter` starts, `Tab` reaches the button | click a level, click **Nouvelle partie** |
 | Guess field | type, `↑` `↓` move in the suggestions, `Enter` submits the highlighted one (or the exact name), `Esc` closes the list, `Esc` again empties the field, `↓` on an empty field lists every city | click a suggestion; the chevron on the right of the field lists every city (scroll with the wheel) |
+| Flèches question | `1`–`4` answer that arrow, `←` `→` aim an arrow, `Enter` answers the aimed one | click an arrow (or its pill); the nearest arrow to the click wins |
+| Flèches verdict | `Enter` for **Suivant** / **Voir le score** | click the button |
 
 A held `Enter` never starts a round, and `Enter` is ignored for a moment after the result
-appears, so the *Bravo !* / *Perdu !* screen cannot be skipped by accident.
+appears (and after every Flèches verdict), so the *Bravo !* / *Perdu !* screen — and the
+Flèches verdict — cannot be skipped by accident.
 
 ## Jouer en ligne
 
@@ -193,12 +229,13 @@ The protocol is specified in [`docs/protocol.md`](docs/protocol.md): transport, 
 every message with a JSON example, state diagrams, timers, scoring, error codes, versioning.
 `boussole-server` never depends on Slint (`cargo tree -p boussole-server | grep -c slint` is 0).
 
-- `src/` — the library `boussole` (the client). The core modules `cities`, `geo`, `search`
-  and `game` live in `crates/boussole-core` and are re-exported here (`boussole::game::Round`
-  works as before). It adds:
+- `src/` — the library `boussole` (the client). The core modules `cities`, `geo`, `search`,
+  `game` and `arrows` (the Flèches engine) live in `crates/boussole-core` and are re-exported
+  here (`boussole::game::Round` works as before). It adds:
   - **presentation logic, still GUI-free and unit-tested:** `board` (arrow and label geometry,
-    French texts), `session` (Setup → Playing → Ended state machine, autocomplete state),
-    `text` (label measurement with the embedded font), `online` (the online reducer, its
+    French texts), `session` (Setup → Playing → Ended state machine, autocomplete state, the
+    game-type choice), `fleches` (the Flèches solo session: questions, aim, verdicts, French
+    texts), `text` (label measurement with the embedded font), `online` (the online reducer, its
     French texts and the view-model of each online screen), `net` (address normalisation and the
     WebSocket client), `host` (the `Host` trait behind *Héberger une partie*, with a fake for
     tests), `embedded_host` (the real one: the server embedded in the app, plus the tunnel),
@@ -211,14 +248,17 @@ every message with a JSON example, state diagrams, timers, scoring, error codes,
   winit window), `real_window_online` (the same for the online mode: hosts on loopback with the real
   server, a second client joins, a round starts, the host quits), `online_screenshots`,
   `sample_round` (prints a round to the terminal, `cargo run --example
-  sample_round -- 42 --reveal`).
+  sample_round -- 42 --reveal`) and `fleches_screenshots` (the Flèches screens, same headless
+  rendering).
 - `ui/*.slint` — the interface: `theme` (palette, fonts), `types`, `widgets` (buttons, level
-  picker, dial, compass rose), `board`, `guess` (input, suggestions, history), `app`; the online
-  screens are `online-state` (the `Online` global), `online-widgets`, `online-menu`,
+  and game pickers, dial, compass rose), `board`, `guess` (input, suggestions, history),
+  `fleches` (the Flèches round and score screens), `app`; the online screens are `online-state` (the `Online` global), `online-widgets`, `online-menu`,
   `online-lobby`, `online-round`, `online-podium` and `online` (header, banner, confirmation).
   `ui/fonts/` holds the two embedded fonts and their licences.
-- `tests/` — `board_layout` (geometry over every secret and several window sizes), `ui_flow`
-  (whole rounds played through the real UI); online: `online_reducer` and `online_view` (every
+- `tests/` — `board_layout` (geometry over every secret, every Flèches option layout and
+  several window sizes), `ui_flow`
+  (whole rounds played through the real UI), `fleches_ui` (whole Flèches games with the keyboard
+  and the mouse, both levels, the Enter guard, the polar click zone); online: `online_reducer` and `online_view` (every
   `ServerMsg`, Course and Coopération sequences, what each screen shows), `net` (the client
   against a scripted WebSocket server in `tests/common`: handshake errors, reconnect with the
   token, giving up, the server going away), `online_flow` (the online screens driven by keys and

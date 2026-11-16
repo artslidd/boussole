@@ -3,14 +3,33 @@
 //! Pure Rust, no GUI types: the Slint glue in [`crate::app`] only forwards events to a
 //! [`Session`] and renders what it reports, so every rule below is unit-tested without a window.
 
+use crate::arrows::AnswerFeedback;
 use crate::cities::{CITIES, City};
+use crate::fleches::FlechesSession;
 use crate::game::{Difficulty, GuessError, GuessFeedback, Round, RoundStatus};
 use crate::search::{find_exact, normalize, search};
 
 /// Number of suggestions shown under the guess field.
 pub const SUGGESTION_LIMIT: usize = 8;
 
-/// Where the player is: before the first round, in a round, or looking at its result.
+/// The game played on the start screen: guess the hidden city, or aim at the target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GameType {
+    #[default]
+    Devinette,
+    Fleches,
+}
+
+/// The round (Devinette) or the ten-question game (Flèches) a session is currently playing.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Game {
+    Devinette(Round),
+    Fleches(FlechesSession),
+}
+
+/// What the player is doing: before the first round, in a round, or looking at its result.
+/// (For Flèches: Setup → the ten questions → the score screen; the verdict between an
+/// answer and "Suivant" is still part of the question, so `Playing`.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     Setup,
@@ -179,7 +198,8 @@ impl Autocomplete {
 #[derive(Debug, Clone)]
 pub struct Session {
     difficulty: Difficulty,
-    round: Option<Round>,
+    game_type: GameType,
+    game: Option<Game>,
     autocomplete: Autocomplete,
     notice: Option<Rejection>,
 }
@@ -191,21 +211,36 @@ impl Default for Session {
 }
 
 impl Session {
-    /// A fresh session in the Setup phase; Facile is preselected.
+    /// A fresh session in the Setup phase; Facile and Devinette are preselected.
     pub fn new() -> Self {
         Self {
             difficulty: Difficulty::Facile,
-            round: None,
+            game_type: GameType::Devinette,
+            game: None,
             autocomplete: Autocomplete::default(),
             notice: None,
         }
     }
 
     pub fn phase(&self) -> Phase {
-        match &self.round {
+        match &self.game {
             None => Phase::Setup,
-            Some(round) if round.status() == RoundStatus::InProgress => Phase::Playing,
-            Some(_) => Phase::Ended,
+            Some(Game::Devinette(round)) => {
+                if round.status() == RoundStatus::InProgress {
+                    Phase::Playing
+                } else {
+                    Phase::Ended
+                }
+            }
+            // The verdict of the tenth question is still on screen: the score screen comes
+            // with its "Suivant".
+            Some(Game::Fleches(fleches)) => {
+                if fleches.is_over() {
+                    Phase::Ended
+                } else {
+                    Phase::Playing
+                }
+            }
         }
     }
 
@@ -214,8 +249,43 @@ impl Session {
         self.difficulty
     }
 
+    /// The game type chosen for the next round, or the one locked in for the current game.
+    pub fn game_type(&self) -> GameType {
+        self.game_type
+    }
+
+    /// Choose the game type of the next round. Returns `false` (and changes nothing) while a
+    /// round or a Flèches game is in progress: the choice is locked for the whole game.
+    pub fn select_game_type(&mut self, game_type: GameType) -> bool {
+        if self.phase() == Phase::Playing {
+            return false;
+        }
+        self.game_type = game_type;
+        true
+    }
+
+    /// The Devinette round, when one is playing.
     pub fn round(&self) -> Option<&Round> {
-        self.round.as_ref()
+        match &self.game {
+            Some(Game::Devinette(round)) => Some(round),
+            _ => None,
+        }
+    }
+
+    /// The Devinette round, mutable, for [`Session::submit`].
+    fn round_mut(&mut self) -> Option<&mut Round> {
+        match &mut self.game {
+            Some(Game::Devinette(round)) => Some(round),
+            _ => None,
+        }
+    }
+
+    /// The Flèches game, when one is playing.
+    pub fn fleches(&self) -> Option<&FlechesSession> {
+        match &self.game {
+            Some(Game::Fleches(fleches)) => Some(fleches),
+            _ => None,
+        }
     }
 
     pub fn autocomplete(&self) -> &Autocomplete {
@@ -237,24 +307,33 @@ impl Session {
         true
     }
 
-    /// Start a new round with the selected difficulty. Returns `false` while a round is in
-    /// progress.
+    /// Start a new round of the selected game type with the selected difficulty. Returns
+    /// `false` while a round is in progress.
     pub fn start_round(&mut self, seed: u64) -> bool {
         if self.phase() == Phase::Playing {
             return false;
         }
-        self.round = Some(Round::new_random(self.difficulty, seed));
+        self.game = Some(match self.game_type {
+            GameType::Devinette => Game::Devinette(Round::new_random(self.difficulty, seed)),
+            GameType::Fleches => Game::Fleches(FlechesSession::new(self.difficulty, seed)),
+        });
         self.autocomplete.clear();
         self.notice = None;
         true
     }
 
-    /// Start a round with a chosen secret (tests, screenshots).
+    /// Start a Devinette round with a chosen secret (tests, screenshots). A test hook for
+    /// Devinette: it plays that game whatever the selected type (and makes it the selection).
     pub fn start_round_with_secret(&mut self, secret: &'static City, seed: u64) -> bool {
         if self.phase() == Phase::Playing {
             return false;
         }
-        self.round = Some(Round::with_secret(secret, self.difficulty, seed));
+        self.game_type = GameType::Devinette;
+        self.game = Some(Game::Devinette(Round::with_secret(
+            secret,
+            self.difficulty,
+            seed,
+        )));
         self.autocomplete.clear();
         self.notice = None;
         true
@@ -288,7 +367,7 @@ impl Session {
             Some(index) => self.autocomplete.pick(index).ok_or(Rejection::UnknownCity),
             None => self.autocomplete.resolve(),
         };
-        let outcome = match (city, self.round.as_mut()) {
+        let outcome = match (city, self.round_mut()) {
             (Err(rejection), _) => Submission::Rejected(rejection),
             (Ok(_), None) => Submission::Rejected(Rejection::NotPlaying),
             (Ok(city), Some(round)) => match round.guess(city) {
@@ -318,14 +397,41 @@ impl Session {
 
     /// Whether a city was already tried in the current round (for dimming suggestions).
     pub fn already_guessed(&self, city: &City) -> bool {
-        self.round
-            .as_ref()
-            .is_some_and(|r| r.guesses().iter().any(|g| g.city.name == city.name))
+        self.round()
+            .is_some_and(|round| round.guesses().iter().any(|g| g.city.name == city.name))
     }
 
     /// Tries used in the current round.
     pub fn tries_used(&self) -> usize {
-        self.round.as_ref().map_or(0, |r| r.guesses().len())
+        self.round().map_or(0, |round| round.guesses().len())
+    }
+
+    // --- Flèches ---------------------------------------------------------------------------
+
+    /// Answer the current Flèches question with arrow `option` (0–3). Refused (`None`)
+    /// outside a Flèches game, and by [`FlechesSession::answer`] when the question is
+    /// already answered or the option out of range.
+    pub fn fleches_answer(&mut self, option: usize) -> Option<AnswerFeedback> {
+        match &mut self.game {
+            Some(Game::Fleches(fleches)) => fleches.answer(option),
+            _ => None,
+        }
+    }
+
+    /// ← / →: move the aimed arrow of the current Flèches question.
+    pub fn fleches_move_focus(&mut self, delta: i32) {
+        if let Some(Game::Fleches(fleches)) = &mut self.game {
+            fleches.move_focus(delta);
+        }
+    }
+
+    /// "Suivant": dismiss the verdict and move to the next question (or the score screen).
+    /// Returns `false` outside a Flèches game or with no verdict showing.
+    pub fn fleches_advance(&mut self) -> bool {
+        match &mut self.game {
+            Some(Game::Fleches(fleches)) => fleches.advance(),
+            _ => false,
+        }
     }
 }
 
@@ -681,5 +787,117 @@ mod tests {
                 .starts_with("Ville inconnue")
         );
         assert!(Rejection::Empty.to_string().contains("ville"));
+    }
+
+    // --- Game type and Flèches ---------------------------------------------------------
+
+    /// Plays a whole Flèches game through the session, right on even questions.
+    fn play_fleches(s: &mut Session) {
+        while !s.fleches().unwrap().is_over() {
+            let correct = s.fleches().unwrap().question().unwrap().correct;
+            let index = s.fleches().unwrap().index();
+            let chosen = if index.is_multiple_of(2) {
+                correct
+            } else {
+                (correct + 1) % 4
+            };
+            assert!(s.fleches_answer(chosen).is_some());
+            assert!(s.fleches_advance());
+        }
+    }
+
+    #[test]
+    fn the_game_type_is_chosen_on_the_start_screen_and_locked_during_a_game() {
+        let mut s = Session::new();
+        assert_eq!(
+            s.game_type(),
+            GameType::Devinette,
+            "Devinette is the default"
+        );
+        assert_eq!(s.phase(), Phase::Setup);
+
+        assert!(s.select_game_type(GameType::Fleches));
+        assert_eq!(s.game_type(), GameType::Fleches);
+        assert!(s.select_difficulty(Difficulty::Difficile));
+        assert!(s.start_round(7));
+        assert!(s.fleches().is_some());
+        assert!(s.round().is_none());
+        assert_eq!(s.phase(), Phase::Playing);
+
+        // locked while the game runs — the game type like the difficulty
+        assert!(!s.select_game_type(GameType::Devinette));
+        assert!(!s.select_difficulty(Difficulty::Facile));
+        assert_eq!(s.game_type(), GameType::Fleches);
+        assert!(!s.start_round(8), "a game is in progress");
+
+        play_fleches(&mut s);
+        assert_eq!(s.phase(), Phase::Ended);
+        assert_eq!(s.fleches().unwrap().score(), 5);
+
+        // free again between games, and the choice is remembered
+        assert!(s.select_game_type(GameType::Devinette));
+        assert!(s.select_difficulty(Difficulty::Facile));
+        assert!(s.start_round(9));
+        assert!(s.round().is_some());
+        assert!(s.fleches().is_none());
+    }
+
+    #[test]
+    fn a_fleches_game_is_driven_through_the_session() {
+        let mut s = Session::new();
+        s.select_game_type(GameType::Fleches);
+        assert!(s.start_round(1));
+
+        for i in 0..10 {
+            let question = s.fleches().unwrap().question().unwrap();
+            assert_eq!(s.fleches().unwrap().index(), i);
+            let chosen = question.correct;
+            let feedback = s.fleches_answer(chosen).expect("answer accepted");
+            assert!(feedback.is_correct);
+            // one answer per question, and nothing before Suivant
+            assert_eq!(s.fleches_answer(chosen), None);
+            assert_eq!(s.phase(), Phase::Playing);
+            assert!(s.fleches_advance());
+        }
+        assert_eq!(s.phase(), Phase::Ended);
+        assert_eq!(s.fleches().unwrap().score(), 10);
+        let recap = s.fleches().unwrap().recap();
+        assert_eq!(recap.len(), 10);
+        assert!(recap.iter().all(|row| row.correct));
+    }
+
+    #[test]
+    fn fleches_helpers_do_nothing_outside_a_fleches_game() {
+        let mut s = Session::new();
+        assert_eq!(s.fleches_answer(0), None);
+        assert!(!s.fleches_advance());
+        s.fleches_move_focus(1); // no panic, nothing to aim at
+        assert_eq!(s.fleches(), None);
+    }
+
+    #[test]
+    fn the_secret_hook_plays_devinette_whatever_the_choice() {
+        let mut s = Session::new();
+        s.select_game_type(GameType::Fleches);
+        assert!(s.start_round_with_secret(city("Lyon"), 3));
+        assert!(s.round().is_some(), "a Devinette round is playing");
+        assert_eq!(s.fleches(), None);
+        assert_eq!(s.game_type(), GameType::Devinette, "the choice follows");
+    }
+
+    #[test]
+    fn the_last_verdict_keeps_the_game_in_the_playing_phase() {
+        let mut s = Session::new();
+        s.select_game_type(GameType::Fleches);
+        assert!(s.start_round(2));
+        for _ in 0..9 {
+            s.fleches_answer(0);
+            assert!(s.fleches_advance());
+        }
+        // tenth question: answered, verdict on screen, score screen not yet
+        assert!(s.fleches_answer(0).is_some());
+        assert_eq!(s.phase(), Phase::Playing);
+        assert!(s.fleches_advance());
+        assert_eq!(s.phase(), Phase::Ended);
     }
 }

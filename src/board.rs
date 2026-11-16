@@ -20,6 +20,7 @@
 //! of their arrow.
 
 use crate::game::{Difficulty, Hint};
+use crate::geo::Compass8;
 use crate::text::{display_text_width, label_text_width};
 
 /// Font size of the arrow labels, in logical pixels (matches `ui/board.slint`).
@@ -167,6 +168,21 @@ pub fn format_dto_label(city: &str, distance_km: Option<u32>) -> String {
     match distance_km {
         Some(km) => format!("{city} · {}", format_distance(f64::from(km))),
         None => city.to_owned(),
+    }
+}
+
+/// Spoken direction for accessibility and the Flèches verdicts: "au nord-est" for the
+/// compass point (`label_fr` gives the abbreviation, "NE").
+pub fn direction_phrase(compass: Compass8) -> &'static str {
+    match compass {
+        Compass8::N => "au nord",
+        Compass8::NE => "au nord-est",
+        Compass8::E => "à l’est",
+        Compass8::SE => "au sud-est",
+        Compass8::S => "au sud",
+        Compass8::SW => "au sud-ouest",
+        Compass8::W => "à l’ouest",
+        Compass8::NW => "au nord-ouest",
     }
 }
 

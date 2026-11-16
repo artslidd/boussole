@@ -4,6 +4,9 @@ export enum Phase { setup, playing, ended }
 
 export enum Level { facile, difficile }
 
+// The game type offered on the start screen (Devinette is the default).
+export enum GameType { devinette, fleches }
+
 // One arrow of the board: SVG path strings in canvas coordinates (computed in Rust).
 export struct ArrowView {
     shaft: string,
@@ -39,6 +42,50 @@ export struct Suggestion {
     name: string,
     // already tried in this round
     tried: bool,
+}
+
+// One numbered arrow of the Flèches board: the SVG paths and the label pill (canvas
+// coordinates, computed in Rust like BoardView), plus the unit vector of its bearing for
+// the polar click zone (the nearest arrow wins).
+export struct FlechesOptionView {
+    // "1"…"4"
+    number: string,
+    shaft: string,
+    head: string,
+    label: LabelView,
+    // unit vector of the arrow's bearing (north = up, y grows downwards)
+    dir-x: float,
+    dir-y: float,
+}
+
+// Everything the Flèches board draws, computed in Rust for the current canvas size (pure
+// callback `compute-fleches-board`, re-evaluated on resize and on every answer).
+export struct FlechesBoardView {
+    options: [FlechesOptionView],
+    // Dial centre and radii (tick ring, filled disc), in canvas coordinates
+    cx: length,
+    cy: length,
+    outer: length,
+    body: length,
+    // Origin city name, always known in Flèches
+    text: string,
+    text-size: length,
+    // Radial band in which a click aims at an arrow: from just inside the dial ring to the
+    // outer edge of the label ring.
+    hit-inner: length,
+    hit-outer: length,
+    // cos of the widest angle between the pointer and an arrow that still aims at it.
+    aim-min-cos: float,
+    // Spoken summary of the board for assistive technology
+    summary: string,
+}
+
+// One line of the Flèches recap: question number, origin → target, right or wrong.
+export struct FlechesRecapRow {
+    number: int,
+    from: string,
+    to: string,
+    correct: bool,
 }
 
 // Everything the round canvas draws, computed in Rust for the current canvas size (pure

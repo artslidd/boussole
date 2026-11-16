@@ -5,14 +5,15 @@
 
 import { AboutSlint } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { Phase, Level, ArrowView, LabelView, GuessRow, Suggestion, BoardView } from "types.slint";
-import { PrimaryButton, GhostButton, LevelPicker, DialFace, Mark } from "widgets.slint";
+import { Phase, Level, GameType, ArrowView, LabelView, GuessRow, Suggestion, BoardView, FlechesBoardView, FlechesOptionView, FlechesRecapRow } from "types.slint";
+import { PrimaryButton, GhostButton, LevelPicker, GamePicker, DialFace, Mark } from "widgets.slint";
 import { Board } from "board.slint";
 import { GuessInput, GuessHistory } from "guess.slint";
+import { FlechesRound, FlechesScore } from "fleches.slint";
 import { OnlineRoot, Online } from "online.slint";
 import { ActionButton } from "online-widgets.slint";
 
-export { Phase, Level, ArrowView, LabelView, GuessRow, Suggestion, BoardView }
+export { Phase, Level, GameType, ArrowView, LabelView, GuessRow, Suggestion, BoardView, FlechesBoardView, FlechesOptionView, FlechesRecapRow }
 export { Online }
 export { OnlineScreen, HostChoice, RoomMode, BannerKind, DotStatus, MenuHelp, PlayerRowView, ScoreRowView, ResultRowView, RankRowView, ShareAddressView } from "types.slint";
 
@@ -32,6 +33,10 @@ export component AppWindow inherits Window {
     // Level selected for the next round; the level of the round while playing (locked).
     in-out property <Level> level: Level.facile;
     in property <string> level-badge;
+    // Game type selected for the next round; the one locked in while a game runs.
+    in property <GameType> game-type: GameType.devinette;
+    // A Flèches game (round or score screen) is on; the Devinette screens are hidden then.
+    in property <bool> fleches-active;
 
     // Dial tick paths (a 200 × 200 box, from Rust) and the board version (see Board)
     in property <string> ticks;
@@ -52,8 +57,27 @@ export component AppWindow inherits Window {
     in property <string> result-city;
     in property <string> result-after;
 
+    // --- Flèches -------------------------------------------------------------------------
+    in property <bool> fleches-answered;
+    // Aimed arrow (0–3) while the question is up.
+    in property <int> fleches-focused;
+    // -1, or the arrow played once the question is answered.
+    in property <int> fleches-chosen: -1;
+    in property <int> fleches-correct: -1;
+    in property <string> fleches-heading;
+    in property <string> fleches-target;
+    in property <int> fleches-question-index;
+    in property <int> fleches-question-total: 10;
+    in property <int> fleches-score;
+    in property <string> fleches-verdict;
+    in property <bool> fleches-verdict-good;
+    in property <string> fleches-detail;
+    in property <string> fleches-next-label;
+    in property <[FlechesRecapRow]> fleches-recap;
+
     // --- Events sent to Rust ---------------------------------------------------------------
     callback choose-level(Level);
+    callback choose-game(GameType);
     callback start-round();
     callback query-edited(string);
     callback submit-guess(int);
@@ -61,6 +85,10 @@ export component AppWindow inherits Window {
     callback dismiss-suggestions();
     callback toggle-browse();
     pure callback compute-board(length, length, int) -> BoardView;
+    pure callback compute-fleches-board(length, length, int) -> FlechesBoardView;
+    callback fleches-answer(int);
+    callback fleches-move-focus(int);
+    callback fleches-next();
 
     public function show-about() {
         about.show();
@@ -118,40 +146,70 @@ export component AppWindow inherits Window {
                 }
 
                 Text {
-                    text: "Quelle ville se cache au centre de la boussole ?";
+                    text: root.game-type == GameType.fleches ? "De la ville de départ, quelle flèche vise la cible ?" : "Quelle ville se cache au centre de la boussole ?";
                     font-size: 21px;
                     color: Theme.ink;
                     wrap: word-wrap;
                 }
 
                 Text {
-                    text: "Cinq flèches pointent, dans leur vraie direction, vers des villes connues. Trouvez la ville cachée en six essais.";
+                    text: root.game-type == GameType.fleches ? "Dix questions : une ville de départ au centre du cadran, une ville cible à trouver parmi quatre flèches. Score sur dix." : "Cinq flèches pointent, dans leur vraie direction, vers des villes connues. Trouvez la ville cachée en six essais.";
                     font-size: 15px;
                     color: Theme.ink-soft;
                     wrap: word-wrap;
                 }
 
-                Rectangle {
-                    height: 6px;
-                }
+                // Level and game type, side by side (the level keeps the keyboard focus:
+                // ← → choose, Tab reaches the game, Enter plays).
+                HorizontalLayout {
+                    spacing: 20px;
 
-                Text {
-                    text: "Niveau de difficulté";
-                    font-size: 15px;
-                    font-weight: 600;
-                    color: Theme.ink;
-                }
+                    VerticalLayout {
+                        spacing: 6px;
+                        Text {
+                            text: "Niveau de difficulté";
+                            font-size: 15px;
+                            font-weight: 600;
+                            color: Theme.ink;
+                        }
 
-                start-picker := LevelPicker {
-                    level: root.level;
-                    chosen(level) => {
-                        root.choose-level(level);
+                        start-picker := LevelPicker {
+                            level: root.level;
+                            facile-description: root.game-type == GameType.fleches ? "Quatre directions bien espacées" : "Distances affichées sur les flèches";
+                            facile-compact-description: root.game-type == GameType.fleches ? "Directions espacées" : "Distances affichées";
+                            difficile-description: root.game-type == GameType.fleches ? "Des leurres tout près du bon cap" : "Flèches seules, sans distances";
+                            difficile-compact-description: root.game-type == GameType.fleches ? "Leurres proches du cap" : "Flèches seules";
+                            show-sample: root.game-type == GameType.fleches ? false : true;
+                            chosen(level) => {
+                                root.choose-level(level);
+                            }
+                            confirmed => {
+                                root.start-round();
+                            }
+                            init => {
+                                self.focus-picker();
+                            }
+                        }
                     }
-                    confirmed => {
-                        root.start-round();
-                    }
-                    init => {
-                        self.focus-picker();
+
+                    VerticalLayout {
+                        spacing: 6px;
+                        Text {
+                            text: "Mode de jeu";
+                            font-size: 15px;
+                            font-weight: 600;
+                            color: Theme.ink;
+                        }
+
+                        GamePicker {
+                            game: root.game-type;
+                            chosen(game) => {
+                                root.choose-game(game);
+                            }
+                            confirmed => {
+                                root.start-round();
+                            }
+                        }
                     }
                 }
 
@@ -177,7 +235,7 @@ export component AppWindow inherits Window {
                 }
 
                 Text {
-                    text: "Flèches gauche et droite pour choisir, Entrée pour jouer";
+                    text: "← → : choisir · Tab : changer de réglage · Entrée : jouer";
                     font-size: 13px;
                     color: Theme.ink-soft;
                     wrap: word-wrap;
@@ -198,11 +256,11 @@ export component AppWindow inherits Window {
     }
 
     // ======================================================================================
-    // Round and end of round
+    // Round and end of round (Devinette)
     // ======================================================================================
     // Header 52 + status strip 46 + dock 168 px; the board gets the rest of the height
     // (tests/ui_flow.rs and tests/board_layout.rs rely on these numbers).
-    if !Online.active && root.phase != Phase.setup: VerticalLayout {
+    if !Online.active && root.phase != Phase.setup && !root.fleches-active: VerticalLayout {
         // Header
         Rectangle {
             height: 52px;
@@ -475,6 +533,65 @@ export component AppWindow inherits Window {
                     }
                 }
             }
+        }
+    }
+
+    // ======================================================================================
+    // Flèches: the round screen (question → verdict), then the score screen
+    // ======================================================================================
+    if !Online.active && root.phase == Phase.playing && root.fleches-active: FlechesRound {
+        ticks: root.ticks;
+        north-tick: root.north-tick;
+        board-version: root.board-version;
+        level-badge: root.level-badge;
+        answered: root.fleches-answered;
+        chosen: root.fleches-chosen;
+        correct: root.fleches-correct;
+        focused: root.fleches-focused;
+        heading: root.fleches-heading;
+        target: root.fleches-target;
+        question-index: root.fleches-question-index;
+        question-total: root.fleches-question-total;
+        score: root.fleches-score;
+        verdict: root.fleches-verdict;
+        verdict-good: root.fleches-verdict-good;
+        detail: root.fleches-detail;
+        next-label: root.fleches-next-label;
+        answer(option) => {
+            root.fleches-answer(option);
+        }
+        move-focus(delta) => {
+            root.fleches-move-focus(delta);
+        }
+        next => {
+            root.fleches-next();
+        }
+        show-about => {
+            root.show-about();
+        }
+        compute-board(width, height, version) => {
+            return root.compute-fleches-board(width, height, version);
+        }
+    }
+
+    if !Online.active && root.phase == Phase.ended && root.fleches-active: FlechesScore {
+        level-badge: root.level-badge;
+        game-choice: root.game-type;
+        level: root.level;
+        score: root.fleches-score;
+        question-total: root.fleches-question-total;
+        recap: root.fleches-recap;
+        choose-game(game) => {
+            root.choose-game(game);
+        }
+        choose-level(level) => {
+            root.choose-level(level);
+        }
+        start-round => {
+            root.start-round();
+        }
+        show-about => {
+            root.show-about();
         }
     }
 

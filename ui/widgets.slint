@@ -1,7 +1,7 @@
 // Small reusable pieces: buttons, the difficulty picker, the dial and the compass rose.
 
 import { Theme } from "theme.slint";
-import { Level } from "types.slint";
+import { Level, GameType } from "types.slint";
 
 // Visible keyboard focus: an ink ring just outside the control.
 export component FocusRing inherits Rectangle {
@@ -22,6 +22,11 @@ export component FocusRing inherits Rectangle {
 
 export component PrimaryButton inherits Rectangle {
     in property <string> text;
+    // While true, Enter and Space are ignored (the accidental-Enter guard of the Flèches
+    // verdict: the key may still be held down from the press that answered).
+    in property <bool> guard: false;
+    // While true, the button holds the keyboard focus (the Flèches verdict hands it over).
+    in property <bool> grab-focus: false;
     callback clicked();
     min-height: 46px;
     min-width: 180px;
@@ -35,11 +40,28 @@ export component PrimaryButton inherits Rectangle {
         root.clicked();
     }
 
+    public function focus-button() {
+        fs.focus();
+    }
+
+    init => {
+        if (root.grab-focus) {
+            fs.focus();
+        }
+    }
+
+    changed grab-focus => {
+        if (root.grab-focus) {
+            fs.focus();
+        }
+    }
+
     fs := FocusScope {
         key-pressed(event) => {
             if (event.text == Key.Return || event.text == " ") {
-                // A held key (auto-repeat) must not press the button again.
-                if (!event.repeat) {
+                // A held key (auto-repeat) must not press the button again, and the guard
+                // eats a stray Enter right after the button appeared.
+                if (!event.repeat && !root.guard) {
                     root.clicked();
                 }
                 return accept;
@@ -132,6 +154,8 @@ component LevelCard inherits Rectangle {
     in property <string> description;
     // Example of an arrow label at this level, shown in the roomy layout only.
     in property <string> sample;
+    // Whether the roomy card shows the sample pill (the game picker does not).
+    in property <bool> show-sample: true;
     in property <bool> selected;
     in property <bool> compact;
     in property <bool> focused;
@@ -201,7 +225,7 @@ component LevelCard inherits Rectangle {
             }
         }
 
-        if !root.compact: VerticalLayout {
+        if !root.compact && root.show-sample: VerticalLayout {
             alignment: center;
             Rectangle {
                 width: sample-pill.preferred-width + 20px;
@@ -242,6 +266,13 @@ export component LevelPicker inherits Rectangle {
     in property <bool> compact;
     in property <bool> stacked: true;
     in property <bool> guard-on-create: false;
+    // What each level means; the defaults are the Devinette texts, the Flèches screens bind
+    // their own (the levels mean different things there).
+    in property <string> facile-description: "Distances affichées sur les flèches";
+    in property <string> facile-compact-description: "Distances affichées";
+    in property <string> difficile-description: "Flèches seules, sans distances";
+    in property <string> difficile-compact-description: "Flèches seules";
+    in property <bool> show-sample: true;
     callback chosen(Level);
     callback confirmed();
     public function focus-picker() {
@@ -284,8 +315,9 @@ export component LevelPicker inherits Rectangle {
                 row: 0;
                 col: 0;
                 title: "Facile";
-                description: root.compact ? "Distances affichées" : "Distances affichées sur les flèches";
+                description: root.compact ? root.facile-compact-description : root.facile-description;
                 sample: "Lyon · 392 km";
+                show-sample: root.show-sample;
                 selected: root.level == Level.facile;
                 compact: root.compact;
                 focused: fs.has-focus && root.level == Level.facile;
@@ -300,14 +332,98 @@ export component LevelPicker inherits Rectangle {
                 row: root.stacked ? 1 : 0;
                 col: root.stacked ? 0 : 1;
                 title: "Difficile";
-                description: root.compact ? "Flèches seules" : "Flèches seules, sans distances";
+                description: root.compact ? root.difficile-compact-description : root.difficile-description;
                 sample: "Lyon";
+                show-sample: root.show-sample;
                 selected: root.level == Level.difficile;
                 compact: root.compact;
                 focused: fs.has-focus && root.level == Level.difficile;
                 clicked => {
                     fs.focus();
                     root.chosen(Level.difficile);
+                }
+            }
+        }
+    }
+}
+
+// The two game modes, chosen exactly like the level (same cards, same keys: arrows switch,
+// Enter confirms). Shown on the start screen next to the level and on the Flèches score
+// screen above the level.
+export component GamePicker inherits Rectangle {
+    in-out property <GameType> game: GameType.devinette;
+    in property <bool> compact;
+    in property <bool> stacked: true;
+    in property <bool> guard-on-create: false;
+    in property <string> devinette-description: "Trouvez la ville cachée au centre du cadran";
+    in property <string> devinette-compact-description: "Ville cachée au centre";
+    in property <string> fleches-description: "Visez la ville cible depuis la ville de départ";
+    in property <string> fleches-compact-description: "Visez la ville cible";
+    callback chosen(GameType);
+    callback confirmed();
+    public function focus-picker() {
+        fs.focus();
+    }
+    property <bool> guarded: root.guard-on-create;
+    min-height: root.stacked ? 2 * (root.compact ? 62px : 84px) + 10px : (root.compact ? 62px : 84px);
+
+    Timer {
+        interval: 700ms;
+        running: root.guarded;
+        triggered => {
+            root.guarded = false;
+        }
+    }
+
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.LeftArrow || event.text == Key.UpArrow) {
+                root.chosen(GameType.devinette);
+                return accept;
+            }
+            if (event.text == Key.RightArrow || event.text == Key.DownArrow) {
+                root.chosen(GameType.fleches);
+                return accept;
+            }
+            if (event.text == Key.Return) {
+                if (!event.repeat && !root.guarded) {
+                    root.confirmed();
+                }
+                return accept;
+            }
+            return reject;
+        }
+
+        GridLayout {
+            spacing: 10px;
+            LevelCard {
+                row: 0;
+                col: 0;
+                title: "Devinette";
+                description: root.compact ? root.devinette-compact-description : root.devinette-description;
+                show-sample: false;
+                selected: root.game == GameType.devinette;
+                compact: root.compact;
+                focused: fs.has-focus && root.game == GameType.devinette;
+                clicked => {
+                    fs.focus();
+                    root.chosen(GameType.devinette);
+                }
+            }
+
+            // Below Devinette when stacked, next to it otherwise.
+            LevelCard {
+                row: root.stacked ? 1 : 0;
+                col: root.stacked ? 0 : 1;
+                title: "Flèches";
+                description: root.compact ? root.fleches-compact-description : root.fleches-description;
+                show-sample: false;
+                selected: root.game == GameType.fleches;
+                compact: root.compact;
+                focused: fs.has-focus && root.game == GameType.fleches;
+                clicked => {
+                    fs.focus();
+                    root.chosen(GameType.fleches);
                 }
             }
         }

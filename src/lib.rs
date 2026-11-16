@@ -8,12 +8,13 @@
 //! * The Slint front end: [`app`] (glue between a [`session::Session`] and the `ui/*.slint`
 //!   files) and [`headless`] (a window without a screen, for screenshots and UI tests).
 
-pub use boussole_core::{cities, game, geo, search};
+pub use boussole_core::{arrows, cities, game, geo, search};
 
 pub mod app;
 pub mod board;
 pub mod clipboard;
 pub mod embedded_host;
+pub mod fleches;
 pub mod headless;
 pub mod host;
 pub mod host_worker;

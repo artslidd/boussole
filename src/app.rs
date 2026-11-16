@@ -5,18 +5,24 @@
 //! pushed back with [`sync`]. The board canvas is the exception: Slint calls the pure callback
 //! `compute-board` with the canvas size, so arrows and labels are recomputed on every resize.
 
+use crate::arrows::QUESTIONS_PER_GAME;
 use crate::board::{self, HintLabel};
 use crate::cities::City;
+use crate::fleches;
 use crate::game::{Difficulty, Round, RoundStatus};
 use crate::geo::Compass8;
 use crate::online_ui::OnlineUi;
-use crate::session::{Phase as SessionPhase, Session, Submission};
+use crate::session::{GameType as SessionGameType, Phase as SessionPhase, Session, Submission};
 use slint::{ComponentHandle, ModelRc, VecModel};
 use std::cell::{Cell, Ref, RefCell};
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 slint::include_modules!();
+
+// The spoken direction moved next to the other French texts of the board; the old path
+// keeps working for this module and the online view.
+pub use crate::board::direction_phrase;
 
 /// A seed from the system clock, for unpredictable rounds.
 pub fn time_seed() -> u64 {
@@ -39,6 +45,20 @@ fn level_from_ui(level: Level) -> Difficulty {
     }
 }
 
+fn game_to_ui(game: SessionGameType) -> GameType {
+    match game {
+        SessionGameType::Devinette => GameType::Devinette,
+        SessionGameType::Fleches => GameType::Fleches,
+    }
+}
+
+fn game_from_ui(game: GameType) -> SessionGameType {
+    match game {
+        GameType::Devinette => SessionGameType::Devinette,
+        GameType::Fleches => SessionGameType::Fleches,
+    }
+}
+
 /// Text of the badge in the header while a round is on (the level is locked).
 pub fn level_badge(difficulty: Difficulty) -> &'static str {
     match difficulty {
@@ -47,17 +67,11 @@ pub fn level_badge(difficulty: Difficulty) -> &'static str {
     }
 }
 
-/// Spoken direction, for accessibility labels.
-pub fn direction_phrase(compass: Compass8) -> &'static str {
-    match compass {
-        Compass8::N => "au nord",
-        Compass8::NE => "au nord-est",
-        Compass8::E => "à l’est",
-        Compass8::SE => "au sud-est",
-        Compass8::S => "au sud",
-        Compass8::SW => "au sud-ouest",
-        Compass8::W => "à l’ouest",
-        Compass8::NW => "au nord-ouest",
+/// Text of the badge during a Flèches game: the game type, then the level.
+pub fn fleches_badge(difficulty: Difficulty) -> &'static str {
+    match difficulty {
+        Difficulty::Facile => "Flèches · Facile",
+        Difficulty::Difficile => "Flèches · Difficile",
     }
 }
 
@@ -169,6 +183,82 @@ pub(crate) fn compute_board(width: f32, height: f32, input: &BoardInput) -> Boar
     }
 }
 
+/// Compute everything the Flèches board draws for a canvas of `width × height` logical
+/// pixels: the dial with the origin city (always known there) and the four arrows, each with
+/// its numbered pill — the correct arrow's pill shows the reveal label once the question
+/// is answered.
+pub(crate) fn compute_fleches_board(
+    width: f32,
+    height: f32,
+    question: &crate::arrows::ArrowQuestion,
+    reveal: Option<&fleches::Reveal>,
+) -> FlechesBoardView {
+    if width < 1.0 || height < 1.0 {
+        return FlechesBoardView::default();
+    }
+    let hints = fleches::option_hint_labels(question, reveal.map(|r| r.label.as_str()));
+    let layout = board::layout_board(f64::from(width), f64::from(height), &hints);
+
+    let options: Vec<FlechesOptionView> = layout
+        .arrows
+        .iter()
+        .zip(&layout.labels)
+        .enumerate()
+        .map(|(i, (arrow, label))| {
+            let direction = board::screen_vector(arrow.bearing_deg);
+            FlechesOptionView {
+                number: (i + 1).to_string().into(),
+                shaft: arrow.shaft_commands().into(),
+                head: arrow.head_commands().into(),
+                label: LabelView {
+                    text: label.text.as_str().into(),
+                    x: label.rect.x as f32,
+                    y: label.rect.y as f32,
+                    width: label.rect.w as f32,
+                    height: label.rect.h as f32,
+                },
+                dir_x: direction.x as f32,
+                dir_y: direction.y as f32,
+            }
+        })
+        .collect();
+
+    let mut summary = format!(
+        "De {} vers {} : ",
+        question.origin.name, question.target.name
+    );
+    for (i, arrow) in layout.arrows.iter().enumerate() {
+        if i > 0 {
+            summary.push_str(", ");
+        }
+        summary.push_str(&format!(
+            "la flèche {} pointe {}",
+            i + 1,
+            direction_phrase(Compass8::from_bearing(arrow.bearing_deg))
+        ));
+    }
+    summary.push('.');
+    if let Some(reveal) = reveal {
+        summary.push(' ');
+        summary.push_str(&reveal.sentence);
+    }
+
+    FlechesBoardView {
+        options: ModelRc::new(VecModel::from(options)),
+        cx: layout.center.x as f32,
+        cy: layout.center.y as f32,
+        outer: layout.dial_outer_radius as f32,
+        body: layout.dial_body_radius as f32,
+        text: question.origin.name.into(),
+        text_size: board::dial_text_size(question.origin.name, layout.dial_body_radius) as f32,
+        // The polar click band: from just inside the dial ring out to the label ring's edge.
+        hit_inner: (layout.dial_outer_radius - 14.0).max(0.0) as f32,
+        hit_outer: (layout.tip_radius() + board::LABEL_GAP + board::LABEL_HEIGHT + 6.0) as f32,
+        aim_min_cos: fleches::AIM_TOLERANCE_DEG.cos() as f32,
+        summary: summary.into(),
+    }
+}
+
 /// Push the whole view state of `session` into the window.
 fn sync(window: &AppWindow, session: &Session) {
     window.set_phase(match session.phase() {
@@ -177,7 +267,17 @@ fn sync(window: &AppWindow, session: &Session) {
         SessionPhase::Ended => Phase::Ended,
     });
     window.set_level(level_to_ui(session.difficulty()));
-    window.set_level_badge(level_badge(session.difficulty()).into());
+    window.set_game_type(game_to_ui(session.game_type()));
+    let fleches = session.fleches();
+    window.set_fleches_active(fleches.is_some());
+    window.set_level_badge(
+        (if fleches.is_some() {
+            fleches_badge(session.difficulty())
+        } else {
+            level_badge(session.difficulty())
+        })
+        .into(),
+    );
 
     let autocomplete = session.autocomplete();
     // Only write the text when it differs, so the cursor never jumps while typing.
@@ -242,6 +342,60 @@ fn sync(window: &AppWindow, session: &Session) {
     window.set_result_before(before.into());
     window.set_result_city(city.into());
     window.set_result_after(after.into());
+
+    if let Some(fleches) = fleches {
+        window.set_fleches_question_index(fleches.index() as i32);
+        window.set_fleches_question_total(QUESTIONS_PER_GAME as i32);
+        window.set_fleches_score(fleches.score() as i32);
+        window.set_fleches_answered(fleches.is_answered());
+        window.set_fleches_focused(fleches.focus() as i32);
+        window.set_fleches_next_label(
+            (if fleches.index() + 1 == QUESTIONS_PER_GAME {
+                "Voir le score"
+            } else {
+                "Suivant"
+            })
+            .into(),
+        );
+        if let Some(question) = fleches.question() {
+            window.set_fleches_heading(
+                fleches::heading_text(question.origin.name, question.target.name).into(),
+            );
+            window.set_fleches_target(question.target.name.into());
+            window.set_fleches_correct(question.correct as i32);
+        }
+        match fleches.feedback() {
+            Some(feedback) => {
+                window.set_fleches_chosen(feedback.chosen as i32);
+                window.set_fleches_verdict(fleches::verdict_text(feedback.is_correct).into());
+                window.set_fleches_verdict_good(feedback.is_correct);
+                window.set_fleches_detail(
+                    fleches
+                        .reveal()
+                        .map(|reveal| reveal.sentence)
+                        .unwrap_or_default()
+                        .into(),
+                );
+            }
+            None => {
+                window.set_fleches_chosen(-1);
+                window.set_fleches_verdict("".into());
+                window.set_fleches_verdict_good(false);
+                window.set_fleches_detail("".into());
+            }
+        }
+        let recap: Vec<FlechesRecapRow> = fleches
+            .recap()
+            .into_iter()
+            .map(|row| FlechesRecapRow {
+                number: row.number as i32,
+                from: row.from.into(),
+                to: row.to.into(),
+                correct: row.correct,
+            })
+            .collect();
+        window.set_fleches_recap(ModelRc::new(VecModel::from(recap)));
+    }
 }
 
 struct Shared {
@@ -312,6 +466,71 @@ impl App {
                     .session
                     .borrow_mut()
                     .select_difficulty(level_from_ui(level));
+                shared.sync(&window);
+            }
+        });
+
+        window.on_choose_game({
+            let shared = shared.clone();
+            let weak = window.as_weak();
+            move |game| {
+                let Some(window) = weak.upgrade() else { return };
+                shared
+                    .session
+                    .borrow_mut()
+                    .select_game_type(game_from_ui(game));
+                shared.sync(&window);
+            }
+        });
+
+        window.on_compute_fleches_board({
+            let shared = shared.clone();
+            move |width, height, _version| {
+                // Test-only bookkeeping, like the Devinette board: which canvas size did Slint
+                // lay the board out at?
+                shared.board_size.set((width, height));
+                let session = shared.session.borrow();
+                let Some(fleches) = session.fleches() else {
+                    return FlechesBoardView::default();
+                };
+                let Some(question) = fleches.question() else {
+                    return FlechesBoardView::default();
+                };
+                compute_fleches_board(width, height, question, fleches.reveal().as_ref())
+            }
+        });
+
+        window.on_fleches_answer({
+            let shared = shared.clone();
+            let weak = window.as_weak();
+            move |option| {
+                let Some(window) = weak.upgrade() else { return };
+                if let Ok(option) = usize::try_from(option) {
+                    shared.session.borrow_mut().fleches_answer(option);
+                }
+                // The reveal changes the correct arrow's label: lay the board out again.
+                shared.refresh_board(&window);
+                shared.sync(&window);
+            }
+        });
+
+        window.on_fleches_move_focus({
+            let shared = shared.clone();
+            let weak = window.as_weak();
+            move |delta| {
+                let Some(window) = weak.upgrade() else { return };
+                shared.session.borrow_mut().fleches_move_focus(delta);
+                shared.sync(&window);
+            }
+        });
+
+        window.on_fleches_next({
+            let shared = shared.clone();
+            let weak = window.as_weak();
+            move || {
+                let Some(window) = weak.upgrade() else { return };
+                shared.session.borrow_mut().fleches_advance();
+                shared.refresh_board(&window);
                 shared.sync(&window);
             }
         });

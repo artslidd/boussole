@@ -1,0 +1,718 @@
+// The Flèches screens: the round (question, answering, verdict + Suivant) and the final
+// score with the recap.
+
+import { Theme } from "theme.slint";
+import { Level, GameType, LabelView, FlechesBoardView, FlechesRecapRow } from "types.slint";
+//
+// The board reuses the Devinette dial: the origin city sits in the centre (always known in
+// Flèches, so the disc is in its "revealed" colours) and the four options are arrows at
+// their exact bearing with a numbered pill at the tip. Geometry is computed in Rust
+// (src/fleches.rs on top of src/board.rs) by the pure callback `compute`; this file only
+// draws the result and handles input:
+//
+// * the whole board is one click zone; a click aims at the nearest arrow when it is close
+//   enough (polar hit-testing in Slint, from per-arrow unit vectors pushed by Rust) — a
+//   generous target along the ray that never confuses two arrows;
+// * each pill is also its own (accessible) button for a precise click and for tests;
+// * `1`–`4` answer, `←`/`→` aim, `Enter` answers the aimed arrow. After an answer the
+//   verdict shows and `Enter` presses **Suivant**, with the same accidental-Enter guard as
+//   the Devinette result (700 ms, repeats always ignored).
+
+import { Theme } from "theme.slint";
+import { Level, GameType, FlechesBoardView, FlechesRecapRow } from "types.slint";
+import { Mark, PrimaryButton, GhostButton, LevelPicker, GamePicker, DialFace, CompassRose } from "widgets.slint";
+
+// One arrow of the Flèches board: shaft + head paths, its state colours, and the numbered
+// pill at its tip (the pill of the correct arrow shows the reveal once answered).
+component FlechesArrow inherits Rectangle {
+    in property <length> board-width;
+    in property <length> board-height;
+    in property <string> shaft;
+    in property <string> head;
+    in property <string> number;
+    in property <LabelView> pill;
+    in property <bool> answered;
+    in property <bool> chosen;
+    in property <bool> correct;
+    in property <bool> focused;
+    in property <bool> hovered;
+    callback answer();
+
+    // The chosen arrow is green when right, red when wrong; the correct arrow is green even
+    // when it was not the one played; the aimed (focused or hovered) arrow is amber; the
+    // two remaining arrows fade once the answer is in.
+    property <bool> marked: self.chosen || self.correct;
+    property <bool> aimed: self.focused || self.hovered;
+    property <color> stroke: self.chosen ? (self.correct ? Theme.go : Theme.signal)
+        : self.correct ? Theme.go
+        : self.aimed ? Theme.amber-deep
+        : self.answered ? Theme.ink-soft
+        : Theme.ink;
+
+    // shaft
+    Path {
+        width: root.board-width;
+        height: root.board-height;
+        viewbox-width: root.board-width / 1px;
+        viewbox-height: root.board-height / 1px;
+        commands: root.shaft;
+        stroke: root.stroke;
+        stroke-width: root.marked ? 5px : root.aimed ? 4.5px : 3px;
+        stroke-line-cap: round;
+    }
+
+    // head
+    Path {
+        width: root.board-width;
+        height: root.board-height;
+        viewbox-width: root.board-width / 1px;
+        viewbox-height: root.board-height / 1px;
+        commands: root.head;
+        fill: root.stroke;
+        stroke: root.stroke;
+        stroke-width: 1.5px;
+        stroke-line-join: round;
+    }
+
+    // pill
+    Rectangle {
+        x: root.pill.x;
+        y: root.pill.y;
+        width: root.pill.width;
+        height: root.pill.height;
+        border-radius: self.height / 2;
+        border-width: root.marked || root.aimed ? 2.5px : 1.5px;
+        border-color: root.chosen && !root.correct ? Theme.signal-ink : root.stroke;
+        background: root.chosen ? (root.correct ? Theme.go-wash : Theme.signal-wash)
+            : root.correct ? Theme.go-wash
+            : root.aimed ? Theme.amber-wash
+            : root.answered ? Theme.paper
+            : Theme.chart;
+
+        Text {
+            width: 100%;
+            height: 100%;
+            text: root.pill.text;
+            color: root.chosen && !root.correct ? Theme.signal-ink
+                : root.marked ? Theme.go
+                : root.answered ? Theme.ink-soft
+                : Theme.ink;
+            font-size: 14px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: clip;
+            wrap: no-wrap;
+        }
+
+        TouchArea {
+            width: 100%;
+            height: 100%;
+            mouse-cursor: root.answered ? default : pointer;
+            accessible-role: button;
+            accessible-label: "Flèche " + root.number;
+            accessible-action-default => {
+                if (!root.answered) {
+                    root.answer();
+                }
+            }
+            clicked => {
+                if (!root.answered) {
+                    root.answer();
+                }
+            }
+        }
+    }
+}
+
+// The Flèches canvas: dial with the origin city, four numbered arrows, the compass rose,
+// and the polar click zone. `compute` comes from Rust, like the Devinette board.
+component FlechesBoard inherits Rectangle {
+    in property <string> ticks;
+    in property <string> north-tick;
+    in property <int> version;
+    in property <bool> answered;
+    in property <int> chosen;
+    in property <int> correct;
+    in property <int> focused;
+    callback answer(int);
+    pure callback compute(length, length, int) -> FlechesBoardView;
+
+    property <FlechesBoardView> view: root.compute(root.width, root.height, root.version);
+
+    background: Theme.paper;
+    accessible-role: image;
+    accessible-label: root.view.summary;
+
+    // --- Polar hit-testing -----------------------------------------------------------------
+    // The pointer, relative to the dial centre, as a radius and a cosine against every
+    // arrow's unit vector. A click (or hover) aims at an arrow when it is in the radial
+    // band around the arrows and within the angular tolerance of some arrow; the nearest
+    // arrow wins.
+    property <float> mx: (zone.mouse-x - root.view.cx) / 1px;
+    property <float> my: (zone.mouse-y - root.view.cy) / 1px;
+    property <float> radius: Math.sqrt(root.mx * root.mx + root.my * root.my);
+    in property <bool> in-band: root.radius >= root.view.hit-inner / 1px && root.radius <= root.view.hit-outer / 1px;
+    property <float> c0: (root.mx * root.view.options[0].dir-x + root.my * root.view.options[0].dir-y) / Math.max(root.radius, 1.0);
+    property <float> c1: (root.mx * root.view.options[1].dir-x + root.my * root.view.options[1].dir-y) / Math.max(root.radius, 1.0);
+    property <float> c2: (root.mx * root.view.options[2].dir-x + root.my * root.view.options[2].dir-y) / Math.max(root.radius, 1.0);
+    property <float> c3: (root.mx * root.view.options[3].dir-x + root.my * root.view.options[3].dir-y) / Math.max(root.radius, 1.0);
+    property <float> best-cos: Math.max(Math.max(root.c0, root.c1), Math.max(root.c2, root.c3));
+    property <int> nearest: root.c0 >= root.c1 && root.c0 >= root.c2 && root.c0 >= root.c3 ? 0
+        : root.c1 >= root.c2 && root.c1 >= root.c3 ? 1
+        : root.c2 >= root.c3 ? 2 : 3;
+    property <bool> aiming: zone.has-hover && !root.answered && root.in-band && root.best-cos >= root.view.aim-min-cos;
+    property <int> hovered: root.aiming ? root.nearest : -1;
+
+    zone := TouchArea {
+        width: 100%;
+        height: 100%;
+        mouse-cursor: root.aiming ? pointer : default;
+        clicked => {
+            if (root.aiming) {
+                root.answer(root.nearest);
+            }
+        }
+    }
+
+    for option[i] in root.view.options: FlechesArrow {
+        board-width: root.width;
+        board-height: root.height;
+        shaft: option.shaft;
+        head: option.head;
+        number: option.number;
+        pill: option.label;
+        answered: root.answered;
+        chosen: root.answered && root.chosen == i;
+        correct: root.answered && root.correct == i;
+        focused: !root.answered && root.focused == i;
+        hovered: root.hovered == i;
+        answer => {
+            root.answer(i);
+        }
+    }
+
+    // The dial: the origin city is known from the start, so the disc is in the revealed style.
+    DialFace {
+        x: root.view.cx - root.view.outer;
+        y: root.view.cy - root.view.outer;
+        width: 2 * root.view.outer;
+        height: 2 * root.view.outer;
+        ticks: root.ticks;
+        north-tick: root.north-tick;
+        body-diameter: 2 * root.view.body;
+        text: root.view.text;
+        text-size: root.view.text-size;
+        text-color: Theme.ink;
+        body-color: Theme.amber-wash;
+    }
+
+    CompassRose {
+        x: root.width - self.width - 12px;
+        y: root.height - self.height - 12px;
+    }
+}
+
+// The header shared by the Flèches screens: mark, title, the locked badge, À propos.
+component FlechesHeader inherits Rectangle {
+    in property <string> level-badge;
+    in property <bool> locked: true;
+    callback show-about();
+
+    height: 52px;
+    HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 12px;
+        spacing: 10px;
+        Mark {
+            y: (parent.height - self.height) / 2;
+        }
+
+        Text {
+            text: "Boussole";
+            font-family: Theme.display-font;
+            font-size: 26px;
+            color: Theme.ink;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        Rectangle {
+            width: badge-text.preferred-width + 34px;
+            height: 30px;
+            y: (parent.height - self.height) / 2;
+            border-radius: 15px;
+            background: Theme.ink;
+            accessible-role: text;
+            accessible-label: (root.locked ? "Niveau verrouillé pendant la partie : " : "Partie terminée : ") + root.level-badge;
+            badge-text := Text {
+                x: 26px;
+                width: self.preferred-width;
+                height: 100%;
+                text: root.level-badge;
+                color: Theme.chart;
+                font-size: 14px;
+                font-weight: 600;
+                vertical-alignment: center;
+            }
+
+            if root.locked: Path {
+                x: 9px;
+                y: 8px;
+                width: 11px;
+                height: 14px;
+                viewbox-width: 11;
+                viewbox-height: 14;
+                commands: "M 2.5 6 L 2.5 4 A 3 3 0 0 1 8.5 4 L 8.5 6 M 1 6 L 10 6 L 10 13 L 1 13 Z";
+                stroke: Theme.chart;
+                stroke-width: 1.5px;
+                stroke-line-join: round;
+                fill: transparent;
+            }
+        }
+
+        GhostButton {
+            y: (parent.height - self.height) / 2;
+            text: "À propos";
+            clicked => {
+                root.show-about();
+            }
+        }
+    }
+}
+
+// One line of the recap: question number, origin vers target, and a drawn check or cross.
+component RecapSlot inherits Rectangle {
+    in property <int> number;
+    in property <FlechesRecapRow> entry;
+    width: 320px;
+    height: 30px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: root.entry.correct ? Theme.go : Theme.rule;
+    background: root.entry.correct ? Theme.go-wash : Theme.chart;
+    accessible-role: text;
+    accessible-label: "Question " + root.number + " : " + root.entry.from + " vers " + root.entry.to + (root.entry.correct ? ", bonne réponse" : ", ratée");
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 8px;
+        Text {
+            width: 16px;
+            text: root.number;
+            color: Theme.ink-soft;
+            font-size: 14px;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: root.entry.from + " vers " + root.entry.to;
+            color: Theme.ink;
+            font-size: 15px;
+            font-weight: 600;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        Path {
+            width: 18px;
+            height: 20px;
+            viewbox-width: 20;
+            viewbox-height: 20;
+            commands: root.entry.correct ? "M 4 10.5 L 8.5 15 L 16.5 5" : "M 5 5 L 15 15 M 15 5 L 5 15";
+            fill: transparent;
+            stroke: root.entry.correct ? Theme.go : Theme.signal;
+            stroke-width: 2.2px;
+            stroke-line-cap: round;
+            stroke-line-join: round;
+        }
+    }
+}
+
+// The Flèches round: header, board, the question strip, and the dock (answering controls
+// while the question is up, verdict + Suivant after the answer).
+export component FlechesRound inherits Rectangle {
+    in property <string> ticks;
+    in property <string> north-tick;
+    in property <int> board-version;
+    in property <string> level-badge;
+    in property <bool> answered;
+    in property <int> chosen;
+    in property <int> correct;
+    in property <int> focused;
+    in property <string> heading;
+    in property <string> target;
+    in property <int> question-index;
+    in property <int> question-total;
+    in property <int> score;
+    in property <string> verdict;
+    in property <bool> verdict-good;
+    in property <string> detail;
+    in property <string> next-label;
+    callback answer(int);
+    callback move-focus(int);
+    callback next();
+    callback show-about();
+    pure callback compute-board(length, length, int) -> FlechesBoardView;
+
+    // The accidental-Enter guard of the verdict: the Enter that answered may still be held
+    // down when Suivant takes the focus.
+    property <bool> next-guarded: false;
+    // Tells Suivant to take the focus when the verdict appears.
+    property <bool> next-focus: false;
+
+    init => {
+        keys.focus();
+    }
+
+    changed answered => {
+        if (root.answered) {
+            root.next-guarded = true;
+            root.next-focus = true;
+        } else {
+            root.next-guarded = false;
+            root.next-focus = false;
+            keys.focus();
+        }
+    }
+
+    Timer {
+        interval: 700ms;
+        running: root.next-guarded;
+        triggered => {
+            root.next-guarded = false;
+        }
+    }
+
+    VerticalLayout {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+
+        FlechesHeader {
+            level-badge: root.level-badge;
+            show-about => {
+                root.show-about();
+            }
+        }
+
+        board := FlechesBoard {
+            vertical-stretch: 1;
+            ticks: root.ticks;
+            north-tick: root.north-tick;
+            version: root.board-version;
+            answered: root.answered;
+            chosen: root.chosen;
+            correct: root.correct;
+            focused: root.focused;
+            answer(option) => {
+                root.answer(option);
+            }
+            compute(width, height, version) => {
+                return root.compute-board(width, height, version);
+            }
+        }
+
+        // Question strip: heading, progress, score
+        Rectangle {
+            height: 46px;
+            background: root.answered ? (root.verdict-good ? Theme.go-wash : Theme.signal-wash) : Theme.rule;
+            border-width: 0px;
+            accessible-role: text;
+            accessible-label: root.heading + ". Question " + min(root.question-index + 1, root.question-total) + " sur " + root.question-total + ". Score : " + root.score + ".";
+
+            HorizontalLayout {
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 14px;
+
+                Text {
+                    text: root.heading;
+                    font-family: Theme.display-font;
+                    font-size: 21px;
+                    color: root.answered ? (root.verdict-good ? Theme.go : Theme.signal-ink) : Theme.ink;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Text {
+                    text: "Question " + min(root.question-index + 1, root.question-total) + " / " + root.question-total;
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: "Score : " + root.score;
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: Theme.ink;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Dock: controls on the left, the rules of the game on the right
+        Rectangle {
+            height: 168px;
+            background: Theme.chart;
+            Rectangle {
+                y: 0px;
+                height: 1px;
+                background: Theme.ink;
+            }
+
+            HorizontalLayout {
+                padding: 14px;
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 28px;
+
+                Rectangle {
+                    horizontal-stretch: 4;
+                    min-width: 300px;
+                    max-width: 430px;
+
+                    if !root.answered: VerticalLayout {
+                        alignment: center;
+                        spacing: 10px;
+
+                        Text {
+                            text: "Quelle flèche va vers " + root.target + " ?";
+                            font-size: 16px;
+                            font-weight: 600;
+                            color: Theme.ink;
+                            wrap: word-wrap;
+                        }
+
+                        Text {
+                            text: "Cliquez une flèche ou tapez son numéro (1 à 4). ← → : viser · Entrée : répondre";
+                            font-size: 14px;
+                            color: Theme.ink-soft;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    if root.answered: VerticalLayout {
+                        alignment: start;
+                        spacing: 8px;
+
+                        Text {
+                            text: root.verdict;
+                            font-family: Theme.display-font;
+                            font-size: 24px;
+                            color: root.verdict-good ? Theme.go : Theme.signal-ink;
+                        }
+
+                        Text {
+                            text: root.detail;
+                            font-size: 15px;
+                            color: Theme.ink;
+                            wrap: word-wrap;
+                            overflow: elide;
+                        }
+
+                        suivant := PrimaryButton {
+                            text: root.next-label;
+                            guard: root.next-guarded;
+                            grab-focus: root.next-focus;
+                            clicked => {
+                                root.next();
+                            }
+                        }
+                    }
+                }
+
+                Text {
+                    horizontal-stretch: 6;
+                    text: "Les quatre flèches partent de la ville de départ, dans leur vraie direction ; une seule suit le cap vers la cible. En Facile elles sont bien espacées, en Difficile un leurre passe tout près du bon cap.";
+                    font-size: 14px;
+                    color: Theme.ink-soft;
+                    wrap: word-wrap;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    // Keyboard: 1–4 answer, ← → aim, Enter answers the aimed arrow (the Suivant button has
+    // the focus while the verdict shows). `focus-on-click` must stay off: the scope covers
+    // the whole screen, and with it on it would swallow the first click after every answer
+    // (when the focus is on Suivant) to take the focus for itself.
+    keys := FocusScope {
+        width: 100%;
+        height: 100%;
+        focus-on-click: false;
+        key-pressed(event) => {
+            if (root.answered) {
+                return reject;
+            }
+            if (event.text == "1") {
+                root.answer(0);
+                return accept;
+            }
+            if (event.text == "2") {
+                root.answer(1);
+                return accept;
+            }
+            if (event.text == "3") {
+                root.answer(2);
+                return accept;
+            }
+            if (event.text == "4") {
+                root.answer(3);
+                return accept;
+            }
+            if (event.text == Key.LeftArrow) {
+                root.move-focus(-1);
+                return accept;
+            }
+            if (event.text == Key.RightArrow) {
+                root.move-focus(1);
+                return accept;
+            }
+            if (event.text == Key.Return) {
+                if (!event.repeat) {
+                    root.answer(root.focused);
+                }
+                return accept;
+            }
+            return reject;
+        }
+    }
+}
+
+// The Flèches score screen: the score out of ten, the recap of the ten questions, and the
+// choices (game, level) with **Nouvelle partie**. The pickers carry the accidental-Enter
+// guard: the Enter that pressed "Voir le score" may still be held down.
+export component FlechesScore inherits Rectangle {
+    in property <string> level-badge;
+    in property <GameType> game-choice;
+    in property <Level> level;
+    in property <int> score;
+    in property <int> question-total;
+    in property <[FlechesRecapRow]> recap;
+    callback choose-game(GameType);
+    callback choose-level(Level);
+    callback start-round();
+    callback show-about();
+
+    background: Theme.paper;
+
+    VerticalLayout {
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+
+        FlechesHeader {
+            level-badge: root.level-badge;
+            locked: false;
+            show-about => {
+                root.show-about();
+            }
+        }
+
+        VerticalLayout {
+            vertical-stretch: 1;
+            alignment: center;
+            padding: 20px;
+            padding-left: 40px;
+            padding-right: 40px;
+            spacing: 18px;
+
+            // The score
+            HorizontalLayout {
+                alignment: center;
+                spacing: 8px;
+                Text {
+                    text: "Score :";
+                    font-family: Theme.display-font;
+                    font-size: 34px;
+                    color: Theme.ink;
+                }
+                Text {
+                    text: root.score;
+                    font-family: Theme.display-font;
+                    font-size: 34px;
+                    color: root.score * 3 >= root.question-total * 2 ? Theme.go : root.score * 3 <= root.question-total ? Theme.signal : Theme.ink;
+                }
+                Text {
+                    text: "/ " + root.question-total;
+                    font-family: Theme.display-font;
+                    font-size: 34px;
+                    color: Theme.ink-soft;
+                }
+            }
+
+            // The recap: two columns of five
+            Rectangle {
+                width: 2 * 320px + 24px;
+                height: 5 * 36px;
+                for number in root.question-total: RecapSlot {
+                    x: floor(number / 5) * (320px + 24px);
+                    y: mod(number, 5) * 36px;
+                    number: number + 1;
+                    entry: number < root.recap.length ? root.recap[number] : { number: 0, from: "", to: "", correct: false };
+                }
+            }
+
+            // Next game: game, level, then the button
+            VerticalLayout {
+                alignment: center;
+                spacing: 14px;
+
+                GamePicker {
+                    game: root.game-choice;
+                    compact: true;
+                    stacked: false;
+                    guard-on-create: true;
+                    chosen(game) => {
+                        root.choose-game(game);
+                    }
+                    confirmed => {
+                        root.start-round();
+                    }
+                    init => {
+                        self.focus-picker();
+                    }
+                }
+
+                LevelPicker {
+                    level: root.level;
+                    compact: true;
+                    stacked: false;
+                    guard-on-create: true;
+                    facile-description: root.game-choice == GameType.fleches ? "Quatre directions bien espacées" : "Distances affichées sur les flèches";
+                    facile-compact-description: root.game-choice == GameType.fleches ? "Directions espacées" : "Distances affichées";
+                    difficile-description: root.game-choice == GameType.fleches ? "Des leurres tout près du bon cap" : "Flèches seules, sans distances";
+                    difficile-compact-description: root.game-choice == GameType.fleches ? "Leurres proches du cap" : "Flèches seules";
+                    show-sample: root.game-choice == GameType.fleches ? false : true;
+                    chosen(level) => {
+                        root.choose-level(level);
+                    }
+                    confirmed => {
+                        root.start-round();
+                    }
+                }
+
+                PrimaryButton {
+                    text: "Nouvelle partie";
+                    clicked => {
+                        root.start-round();
+                    }
+                }
+            }
+        }
+    }
+}

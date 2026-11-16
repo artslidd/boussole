@@ -185,3 +185,77 @@ fn five_long_labels_at_15_degrees_still_never_overlap() {
         }
     }
 }
+
+// --- Flèches -------------------------------------------------------------------------------
+
+use boussole::arrows::ArrowGame;
+use boussole::fleches;
+
+/// The four Flèches options keep a valid board in both states — numbered pills while the
+/// question is up, the long reveal label ("Brest · 1 000 km · NO") on the correct arrow once
+/// it is answered — over real games of both difficulties.
+#[test]
+fn fleches_options_give_valid_boards_before_and_after_the_answer() {
+    for seed in 0..40u64 {
+        for difficulty in [Difficulty::Facile, Difficulty::Difficile] {
+            let mut game = ArrowGame::new(difficulty, seed);
+            while !game.is_over() {
+                let question = game.current().expect("question").clone();
+                // Answering gives the feedback the reveal label is built from.
+                let feedback = game.answer(0).expect("answer");
+                let reveal = fleches::reveal_label(
+                    question.target.name,
+                    feedback.distance_km,
+                    feedback.compass,
+                );
+                for answered in [false, true] {
+                    let hints =
+                        fleches::option_hint_labels(&question, answered.then_some(reveal.as_str()));
+                    for (w, h) in SIZES {
+                        assert_valid(
+                            &format!(
+                                "flèches seed {seed} {difficulty:?} question {}",
+                                game.index()
+                            ),
+                            w,
+                            h,
+                            &hints,
+                        );
+                    }
+                }
+                game.advance();
+            }
+        }
+    }
+}
+
+/// The tightest Flèches case: in Difficile the near distractor sits 25° from the answer, and
+/// once answered the correct arrow takes the longest realistic reveal label.
+#[test]
+fn a_long_reveal_label_25_degrees_from_a_neighbour_stays_readable() {
+    let reveal = "Châlons-en-Champagne · 1 000 km · SO";
+    for start in (0..360).step_by(5) {
+        let answer = f64::from(start);
+        let hints = [
+            HintLabel {
+                bearing_deg: answer,
+                text: reveal.to_owned(),
+            },
+            HintLabel {
+                bearing_deg: (answer + 25.0).rem_euclid(360.0),
+                text: "2".to_owned(),
+            },
+            HintLabel {
+                bearing_deg: (answer + 180.0).rem_euclid(360.0),
+                text: "3".to_owned(),
+            },
+            HintLabel {
+                bearing_deg: (answer + 270.0).rem_euclid(360.0),
+                text: "4".to_owned(),
+            },
+        ];
+        for (w, h) in SIZES {
+            assert_valid(&format!("reveal at {start}°"), w, h, &hints);
+        }
+    }
+}
