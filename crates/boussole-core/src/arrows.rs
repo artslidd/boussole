@@ -2,7 +2,7 @@
 //!
 //! An [`ArrowQuestion`] offers [`OPTION_COUNT`] bearings leaving the start city
 //! ([`ArrowQuestion::origin`]); exactly one is the true bearing towards
-//! [`ArrowQuestion::target`] (as computed by [`bearing_deg`](crate::geo::bearing_deg)), the
+//! [`ArrowQuestion::target`] (as computed by [`crate::geo::bearing_deg`]), the
 //! other three are synthetic distractor bearings. Distractors keep a difficulty-dependent
 //! minimum angular separation from each other and from the answer ([`min_gap_deg`]: 60° in
 //! Facile, 25° in Difficile); in Difficile, at least one distractor lies within 25–45° of
@@ -72,7 +72,7 @@ impl ArrowQuestion {
     /// One question drawn with a random `(origin, target)` pair, fully determined by
     /// `seed`.
     ///
-    /// Both cities are drawn from all of [`CITIES`](crate::cities::CITIES), not only the
+    /// Both cities are drawn from all of [`crate::cities::CITIES`], not only the
     /// `reference` ones: in Flèches both cities are named on screen, and `reference` is a
     /// Devinette criterion for hint arrows, not for targets.
     pub fn new_random(difficulty: Difficulty, seed: u64) -> Self {

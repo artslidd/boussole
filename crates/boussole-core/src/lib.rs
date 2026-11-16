@@ -17,7 +17,7 @@ mod rng;
 pub mod search;
 
 /// Human-readable dataset revision. **Bump it whenever the content of
-/// [`cities::CITIES`](cities::CITIES) changes in a way that matters on the wire**: a city added,
+/// [`cities::CITIES`] changes in a way that matters on the wire**: a city added,
 /// removed, renamed, moved or reordered. The `dataset_fingerprint_is_pinned` test fails in that
 /// case; update the pinned value and bump this constant in the same commit. Edits that do not
 /// touch names or coordinates (population, `reference`) do not change the fingerprint and need
