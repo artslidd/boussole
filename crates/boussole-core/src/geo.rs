@@ -25,6 +25,12 @@ pub fn bearing_deg(from: &City, to: &City) -> f64 {
     if deg >= 360.0 { 0.0 } else { deg }
 }
 
+/// Smallest angle between two bearings, in `[0, 180]`.
+pub(crate) fn angle_gap(a: f64, b: f64) -> f64 {
+    let d = (a - b).abs() % 360.0;
+    d.min(360.0 - d)
+}
+
 /// The eight principal compass directions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compass8 {

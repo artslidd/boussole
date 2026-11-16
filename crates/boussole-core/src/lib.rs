@@ -2,15 +2,18 @@
 //! the server.
 //!
 //! [`cities`] (embedded dataset), [`geo`] (distance, bearing, compass), [`search`]
-//! (autocomplete) and [`game`] (difficulty, hints, rounds).
+//! (autocomplete), [`game`] (difficulty, hints, rounds) and [`arrows`] (the Flèches
+//! arrow-picking game).
 //!
 //! The dataset is part of the multiplayer contract: the server and every client must agree on
 //! the list of cities (names are the wire identifiers). [`dataset_fingerprint`] lets them check
 //! that on connect.
 
+pub mod arrows;
 pub mod cities;
 pub mod game;
 pub mod geo;
+mod rng;
 pub mod search;
 
 /// Human-readable dataset revision. **Bump it whenever the content of

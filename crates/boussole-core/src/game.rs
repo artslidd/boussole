@@ -1,7 +1,8 @@
 //! Difficulty levels, hint generation and the guess/round state machine.
 
 use crate::cities::{CITIES, City};
-use crate::geo::{bearing_deg, distance_km};
+use crate::geo::{angle_gap, bearing_deg, distance_km};
+use crate::rng::SplitMix64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Difficulty {
@@ -158,12 +159,6 @@ impl Round {
     }
 }
 
-/// Smallest angle between two bearings, in `[0, 180]`.
-fn angle_gap(a: f64, b: f64) -> f64 {
-    let d = (a - b).abs() % 360.0;
-    d.min(360.0 - d)
-}
-
 /// Pick `HINT_COUNT` reference cities (never the secret, at least `MIN_HINT_KM` away),
 /// following the `RELAXATION` ladder, sorted by bearing.
 fn pick_hints(secret: &City, rng: &mut SplitMix64) -> Vec<Hint> {
@@ -221,35 +216,6 @@ fn choose(pool: &[Hint], min_gap: f64, chosen: &mut Vec<Hint>) -> bool {
     false
 }
 
-/// SplitMix64: tiny, fast, well-mixed even for consecutive seeds (0, 1, 2, …).
-struct SplitMix64(u64);
-
-impl SplitMix64 {
-    fn new(seed: u64) -> Self {
-        Self(seed)
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    /// Uniform-enough index in `0..n` (modulo bias is ~n/2^64, irrelevant here).
-    fn below(&mut self, n: usize) -> usize {
-        (self.next_u64() % n as u64) as usize
-    }
-
-    /// Fisher–Yates.
-    fn shuffle<T>(&mut self, items: &mut [T]) {
-        for i in (1..items.len()).rev() {
-            items.swap(i, self.below(i + 1));
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,14 +227,6 @@ mod tests {
         assert!(!Difficulty::Difficile.shows_distances());
         assert_eq!(Difficulty::Facile.label_fr(), "Facile");
         assert_eq!(Difficulty::Difficile.label_fr(), "Difficile");
-    }
-
-    #[test]
-    fn splitmix64_matches_reference_vector() {
-        // First outputs of SplitMix64 seeded with 0 (reference implementation).
-        let mut rng = SplitMix64::new(0);
-        assert_eq!(rng.next_u64(), 0xE220_A839_7B1D_CDAF);
-        assert_eq!(rng.next_u64(), 0x6E78_9E6A_A1B9_65F4);
     }
 
     #[test]
