@@ -224,8 +224,9 @@ pub(crate) fn compute_fleches_board(
         .collect();
 
     let mut summary = format!(
-        "De {} vers {} : ",
-        question.origin.name, question.target.name
+        "{} vers {} : ",
+        fleches::de_city(question.origin.name, true),
+        question.target.name
     );
     for (i, arrow) in layout.arrows.iter().enumerate() {
         if i > 0 {

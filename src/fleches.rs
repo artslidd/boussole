@@ -22,9 +22,32 @@ use crate::geo::Compass8;
 /// nearest arrow is always the one the player aimed at.
 pub const AIM_TOLERANCE_DEG: f64 = 45.0;
 
-/// "De Lyon vers Brest ?" — the question heading.
+/// Whether a city name starts with a vowel — accented ones included (Évreux, Orléans,
+/// Angoulême) — or a mute *h*, which all elide "de" in French. The dataset has no
+/// aspirated-*h* name; the only *h* cities would be mute ones like Hyères.
+fn starts_with_vowel_or_mute_h(name: &str) -> bool {
+    name.chars()
+        .next()
+        .and_then(|first| first.to_lowercase().next())
+        .is_some_and(|first| "haeiouyàâäéèêëîïôöùûüœ".contains(first))
+}
+
+/// "de" before a city name, with the French elision: "De Lyon" / "D’Aurillac"
+/// (capitalised, at the start of a sentence) or "de Lyon" / "d’Évreux". Every
+/// vowel-initial or mute-*h* name takes the elided form.
+///
+/// Kept reusable: the online Flèches screens (ticket 10) need the same sentences.
+pub fn de_city(name: &str, capitalized: bool) -> String {
+    if starts_with_vowel_or_mute_h(name) {
+        format!("{}’{name}", if capitalized { "D" } else { "d" })
+    } else {
+        format!("{} {name}", if capitalized { "De" } else { "de" })
+    }
+}
+
+/// "De Lyon vers Brest ?" / "D’Aurillac vers Laval ?" — the question heading.
 pub fn heading_text(origin: &str, target: &str) -> String {
-    format!("De {origin} vers {target} ?")
+    format!("{} vers {target} ?", de_city(origin, true))
 }
 
 /// "Bonne réponse !" / "Raté !" — the verdict.
@@ -36,12 +59,14 @@ pub fn verdict_text(is_correct: bool) -> &'static str {
     }
 }
 
-/// "Brest est à 690 km au nord-ouest de Lyon." — the sentence under the verdict.
+/// "Brest est à 690 km au nord-ouest de Lyon." / "… au nord-ouest d’Aurillac." — the
+/// sentence under the verdict.
 pub fn detail_text(origin: &str, target: &str, distance_km: f64, compass: Compass8) -> String {
     format!(
-        "{target} est à {} km {} de {origin}.",
+        "{target} est à {} km {} {}.",
         format_km(distance_km),
-        direction_phrase(compass)
+        direction_phrase(compass),
+        de_city(origin, false)
     )
 }
 
@@ -237,6 +262,7 @@ impl FlechesSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cities::CITIES;
     use crate::geo::bearing_deg;
     use std::collections::HashSet;
 
@@ -249,11 +275,16 @@ mod tests {
     #[test]
     fn texts_are_french() {
         assert_eq!(heading_text("Lyon", "Brest"), "De Lyon vers Brest ?");
+        assert_eq!(heading_text("Aurillac", "Laval"), "D’Aurillac vers Laval ?");
         assert_eq!(verdict_text(true), "Bonne réponse !");
         assert_eq!(verdict_text(false), "Raté !");
         assert_eq!(
             detail_text("Lyon", "Brest", 690.4, Compass8::NW),
             "Brest est à 690 km au nord-ouest de Lyon."
+        );
+        assert_eq!(
+            detail_text("Aurillac", "Laval", 427.3, Compass8::N),
+            "Laval est à 427 km au nord d’Aurillac."
         );
         assert_eq!(
             reveal_label("Brest", 690.4, Compass8::NW),
@@ -262,6 +293,52 @@ mod tests {
         assert_eq!(
             reveal_label("Brest", 999.6, Compass8::SW),
             "Brest · 1 000 km · SO"
+        );
+    }
+
+    #[test]
+    fn de_elides_before_every_vowel_initial_city_of_the_dataset() {
+        // spot checks, accents and case included
+        assert_eq!(de_city("Lyon", true), "De Lyon");
+        assert_eq!(de_city("Lyon", false), "de Lyon");
+        assert_eq!(de_city("Aurillac", true), "D’Aurillac");
+        assert_eq!(de_city("Évreux", false), "d’Évreux");
+        assert_eq!(de_city("Orléans", true), "D’Orléans");
+        assert_eq!(de_city("Ajaccio", false), "d’Ajaccio");
+        assert_eq!(de_city("Angoulême", false), "d’Angoulême");
+        // a mute-h name elides too (none in the dataset yet, the rule must still hold)
+        assert_eq!(de_city("Hyères", true), "D’Hyères");
+
+        // the whole dataset: every name gets exactly one of the two forms, and the
+        // vowel-initial ones (there are many) all elide.
+        let mut vowel_initial = 0;
+        for city in CITIES {
+            let elided = starts_with_vowel_or_mute_h(city.name);
+            assert_eq!(
+                de_city(city.name, true),
+                if elided {
+                    format!("D’{}", city.name)
+                } else {
+                    format!("De {}", city.name)
+                },
+                "{}",
+                city.name
+            );
+            assert_eq!(
+                de_city(city.name, false),
+                if elided {
+                    format!("d’{}", city.name)
+                } else {
+                    format!("de {}", city.name)
+                },
+                "{}",
+                city.name
+            );
+            vowel_initial += usize::from(elided);
+        }
+        assert!(
+            vowel_initial >= 15,
+            "the dataset has vowel-initial cities ({vowel_initial}), the elision matters"
         );
     }
 

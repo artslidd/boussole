@@ -655,54 +655,64 @@ export component FlechesScore inherits Rectangle {
                 }
             }
 
-            // The recap: two columns of five
-            Rectangle {
-                width: 2 * 320px + 24px;
-                height: 5 * 36px;
-                for number in root.question-total: RecapSlot {
-                    x: floor(number / 5) * (320px + 24px);
-                    y: mod(number, 5) * 36px;
-                    number: number + 1;
-                    entry: number < root.recap.length ? root.recap[number] : { number: 0, from: "", to: "", correct: false };
+            // The recap: two columns of five, centred like the score line
+            HorizontalLayout {
+                alignment: center;
+
+                Rectangle {
+                    width: 2 * 320px + 24px;
+                    height: 5 * 36px;
+                    for number in root.question-total: RecapSlot {
+                        x: floor(number / 5) * (320px + 24px);
+                        y: mod(number, 5) * 36px;
+                        number: number + 1;
+                        entry: number < root.recap.length ? root.recap[number] : { number: 0, from: "", to: "", correct: false };
+                    }
                 }
             }
 
-            // Next game: game, level, then the button
+            // Next game: the level then the game type, side by side like the start screen,
+            // then the button.
             VerticalLayout {
                 alignment: center;
                 spacing: 14px;
 
-                GamePicker {
-                    game: root.game-choice;
-                    compact: true;
-                    stacked: false;
-                    guard-on-create: true;
-                    chosen(game) => {
-                        root.choose-game(game);
-                    }
-                    confirmed => {
-                        root.start-round();
-                    }
-                    init => {
-                        self.focus-picker();
-                    }
-                }
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 20px;
 
-                LevelPicker {
-                    level: root.level;
-                    compact: true;
-                    stacked: false;
-                    guard-on-create: true;
-                    facile-description: root.game-choice == GameType.fleches ? "Quatre directions bien espacées" : "Distances affichées sur les flèches";
-                    facile-compact-description: root.game-choice == GameType.fleches ? "Directions espacées" : "Distances affichées";
-                    difficile-description: root.game-choice == GameType.fleches ? "Des leurres tout près du bon cap" : "Flèches seules, sans distances";
-                    difficile-compact-description: root.game-choice == GameType.fleches ? "Leurres proches du cap" : "Flèches seules";
-                    show-sample: root.game-choice == GameType.fleches ? false : true;
-                    chosen(level) => {
-                        root.choose-level(level);
+                    LevelPicker {
+                        level: root.level;
+                        compact: true;
+                        stacked: false;
+                        guard-on-create: true;
+                        facile-description: root.game-choice == GameType.fleches ? "Quatre directions bien espacées" : "Distances affichées sur les flèches";
+                        facile-compact-description: root.game-choice == GameType.fleches ? "Directions espacées" : "Distances affichées";
+                        difficile-description: root.game-choice == GameType.fleches ? "Des leurres tout près du bon cap" : "Flèches seules, sans distances";
+                        difficile-compact-description: root.game-choice == GameType.fleches ? "Leurres proches du cap" : "Flèches seules";
+                        show-sample: root.game-choice == GameType.fleches ? false : true;
+                        chosen(level) => {
+                            root.choose-level(level);
+                        }
+                        confirmed => {
+                            root.start-round();
+                        }
+                        init => {
+                            self.focus-picker();
+                        }
                     }
-                    confirmed => {
-                        root.start-round();
+
+                    GamePicker {
+                        game: root.game-choice;
+                        compact: true;
+                        stacked: false;
+                        guard-on-create: true;
+                        chosen(game) => {
+                            root.choose-game(game);
+                        }
+                        confirmed => {
+                            root.start-round();
+                        }
                     }
                 }
 

@@ -343,12 +343,38 @@ fn a_full_game_with_the_mouse_only_then_back_to_devinette() {
         .current()
         .unwrap()
         .clone();
-    ui.element(
+    let recap1 = ui.element(
         &format!(
             "Question 1 : {} vers {}, bonne réponse",
             first.origin.name, first.target.name
         ),
         Some(AccessibleRole::Text),
+    );
+    // The recap grid is centred (two 320px columns and a 24px gap in a 1000px window) and
+    // the level sits to the left of the game choice, like on the start screen.
+    let expected_left = (1000.0 - (2.0 * 320.0 + 24.0)) / 2.0;
+    assert!(
+        (recap1.absolute_position().x - expected_left).abs() < 2.0,
+        "the recap is centred: {}",
+        recap1.absolute_position().x
+    );
+    let level = ui
+        .element(
+            "Facile : Directions espacées",
+            Some(AccessibleRole::RadioButton),
+        )
+        .absolute_position()
+        .x;
+    let game = ui
+        .element(
+            "Devinette : Ville cachée au centre",
+            Some(AccessibleRole::RadioButton),
+        )
+        .absolute_position()
+        .x;
+    assert!(
+        level < game,
+        "the level comes first, like on the start screen"
     );
     ui.element("Nouvelle partie", Some(AccessibleRole::Button));
 
@@ -456,7 +482,7 @@ fn assert_labels_inside(ui: &Ui, what: &str, width: u32, height: u32) {
         );
     }
     assert!(
-        board.summary.starts_with("De "),
+        board.summary.starts_with("De ") || board.summary.starts_with("D’"),
         "{what}: {summary}",
         summary = board.summary
     );
@@ -640,8 +666,9 @@ fn the_fleches_controls_have_accessible_names() {
         .clone();
     assert!(
         board.summary.contains(&format!(
-            "De {} vers {}",
-            question.origin.name, question.target.name
+            "{} vers {}",
+            fleches::de_city(question.origin.name, true),
+            question.target.name
         )),
         "{}",
         board.summary

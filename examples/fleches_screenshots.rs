@@ -139,9 +139,9 @@ fn main() -> Result<()> {
     }
     studio.shoot("06-score.png")?;
 
-    // Difficile at the default size: from the score screen, Tab reaches the level choice,
-    // Right picks Difficile, Enter starts the next game of the seed sequence.
-    studio.key(Key::Tab);
+    // Difficile at the default size: from the score screen (the level choice has the
+    // focus, like on the start screen), Right picks Difficile, Enter starts the next
+    // game of the seed sequence.
     studio.key(Key::RightArrow);
     studio.suivant();
     studio.shoot("07-difficile-question.png")?;
@@ -154,7 +154,6 @@ fn main() -> Result<()> {
 
     // Back to Facile, at the minimum window: the choices are remembered except the level,
     // changed back with the keyboard on the score screen.
-    studio.key(Key::Tab);
     studio.key(Key::LeftArrow);
     studio.suivant();
     studio.resize(800, 600);
