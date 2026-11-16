@@ -21,20 +21,38 @@ fn round_started_reaches_everyone_with_five_sorted_hints_and_the_round_timer() {
         let started = round_started(&for_conn(&outs, c.conn)).expect("round_started");
         assert_eq!(started.round_index, 1);
         assert_eq!(started.total_rounds, 2);
-        assert_eq!(started.max_tries, 6);
+        assert_eq!(started.max_tries, Some(6));
         assert_eq!(
             started.timer,
             Timer::Round {
                 remaining_ms: ROUND_MS
             }
         );
-        assert_eq!(started.hints.len(), 5);
-        assert!(started.hints.iter().all(|h| h.city != secret));
+        assert_eq!(started.hints.as_ref().unwrap().len(), 5);
         assert!(
-            started.hints.iter().all(|h| h.distance_km.is_some()),
+            started
+                .hints
+                .as_ref()
+                .unwrap()
+                .iter()
+                .all(|h| h.city != secret)
+        );
+        assert!(
+            started
+                .hints
+                .as_ref()
+                .unwrap()
+                .iter()
+                .all(|h| h.distance_km.is_some()),
             "facile"
         );
-        let bearings: Vec<f64> = started.hints.iter().map(|h| h.bearing_deg).collect();
+        let bearings: Vec<f64> = started
+            .hints
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|h| h.bearing_deg)
+            .collect();
         assert!(
             bearings.windows(2).all(|w| w[0] <= w[1]),
             "sorted by bearing"
@@ -59,11 +77,24 @@ fn difficile_hints_carry_no_distance_at_all() {
     let outs = start(&mut sim, &p[0]);
     for o in &outs {
         if let ServerMsg::RoundStarted(r) = &o.msg {
-            assert!(r.hints.iter().all(|h| h.distance_km.is_none()));
+            assert!(
+                r.hints
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .all(|h| h.distance_km.is_none())
+            );
             assert!(!encode(&o.msg).contains("distance_km"));
         }
         if let ServerMsg::RoomSnapshot(s) = &o.msg {
-            let hints = &s.round.as_ref().expect("round").start.hints;
+            let hints = s
+                .round
+                .as_ref()
+                .expect("round")
+                .start
+                .hints
+                .as_ref()
+                .unwrap();
             assert!(
                 !serde_json::to_string(hints)
                     .unwrap()
@@ -231,14 +262,20 @@ fn the_round_ends_as_soon_as_every_connected_player_is_done() {
     let outs = sim.guess(&p[2], secret);
     for c in &p {
         let ended = round_ended(&for_conn(&outs, c.conn)).expect("round_ended for everyone");
-        assert_eq!(ended.secret, secret);
+        assert_eq!(ended.secret.as_deref(), Some(secret));
         assert_eq!(ended.round_index, 1);
         assert_eq!(ended.next_round_in_ms, Some(INTERMISSION_MS));
         assert_eq!(ended.found_by, None);
-        let solved: Vec<_> = ended.results.iter().map(|r| r.solved).collect();
+        let solved: Vec<_> = ended
+            .results
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|r| r.solved)
+            .collect();
         assert_eq!(solved, [true, false, true]);
         // All guesses are revealed now.
-        let p2 = &ended.results[1];
+        let p2 = &ended.results.as_ref().unwrap()[1];
         assert_eq!(p2.tries_used, 6);
         let cities: Vec<_> = p2.guesses.iter().map(|g| g.city.as_str()).collect();
         assert_eq!(cities, wrong);
@@ -263,7 +300,13 @@ fn points_follow_the_formula_exactly() {
     sim.drain_all();
     let outs = sim.advance(ROUND_MS - 30_000); // P3 never answers: timeout
     let ended = round_ended(&for_conn(&outs, p[0].conn)).expect("ended by the timer");
-    let points: Vec<_> = ended.results.iter().map(|r| (r.points, r.total)).collect();
+    let points: Vec<_> = ended
+        .results
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|r| (r.points, r.total))
+        .collect();
     assert_eq!(points, [(690, 690), (450, 450), (0, 0)]);
     assert_eq!(course_points_via_engine(1, 6_000, ROUND_MS), 690);
     // One-round match: the ranking comes right behind.
@@ -290,7 +333,14 @@ fn the_timer_ends_the_round_at_the_limit_not_before() {
     assert!(sim.advance(ROUND_MS - 1).is_empty());
     let outs = sim.advance(1);
     let ended = round_ended(&for_conn(&outs, p[0].conn)).expect("timeout");
-    assert!(ended.results.iter().all(|r| r.points == 0 && !r.solved));
+    assert!(
+        ended
+            .results
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|r| r.points == 0 && !r.solved)
+    );
 }
 
 #[test]
@@ -483,7 +533,9 @@ fn when_all_but_one_player_drops_the_round_continues_solo() {
     sim.drain_all();
     let outs = sim.guess(&p[0], secret);
     let ended = round_ended(&for_conn(&outs, p[0].conn)).expect("solo finish ends the round");
-    assert!(ended.results[0].solved && !ended.results[1].solved);
+    assert!(
+        ended.results.as_ref().unwrap()[0].solved && !ended.results.as_ref().unwrap()[1].solved
+    );
     sim.check();
 }
 
@@ -526,7 +578,13 @@ fn a_player_who_leaves_mid_round_drops_out_of_the_results() {
     sim.drain_all();
     let outs = sim.guess(&p[1], secret);
     let ended = round_ended(&for_conn(&outs, p[0].conn)).unwrap();
-    let ids: Vec<_> = ended.results.iter().map(|r| r.player_id).collect();
+    let ids: Vec<_> = ended
+        .results
+        .as_ref()
+        .unwrap()
+        .iter()
+        .map(|r| r.player_id)
+        .collect();
     assert_eq!(ids, [p[0].id, p[1].id]);
     assert!(
         round_ended(&for_conn(&outs, p[2].conn)).is_none(),

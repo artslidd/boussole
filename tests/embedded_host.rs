@@ -137,11 +137,15 @@ fn lan_hosting_runs_a_real_match_for_two_clients_and_stopping_releases_the_port(
     }
     // (a lucky guess ends a player's round early; the round ends when both are done)
     let secret_alice = alice.until("round end (alice)", |m| match m {
-        ServerMsg::RoundEnded(r) => Some((r.secret.clone(), r.results.len())),
+        ServerMsg::RoundEnded(r) => {
+            Some((r.secret.clone(), r.results.as_ref().map_or(0, Vec::len)))
+        }
         _ => None,
     });
     let secret_bob = bob.until("round end (bob)", |m| match m {
-        ServerMsg::RoundEnded(r) => Some((r.secret.clone(), r.results.len())),
+        ServerMsg::RoundEnded(r) => {
+            Some((r.secret.clone(), r.results.as_ref().map_or(0, Vec::len)))
+        }
         _ => None,
     });
     assert_eq!(

@@ -327,7 +327,7 @@ pub async fn play_course(
             .await;
         assert_round_safe(
             &c.frames[first_frame..c.frames.len() - 1],
-            &ended.secret,
+            ended.secret.as_deref().expect("a devinette secret"),
             difficulty,
         );
         out.started.push(started);
@@ -413,7 +413,7 @@ pub async fn play_coop(
         };
         assert_round_safe(
             &c.frames[first_frame..c.frames.len() - 1],
-            &ended.secret,
+            ended.secret.as_deref().expect("a devinette secret"),
             difficulty,
         );
         out.started.push(started);
@@ -481,6 +481,21 @@ fn only_in_guesses(v: &serde_json::Value) -> bool {
         }
     }
     !hints_have_distance(v)
+}
+
+/// The frames of one Flèches round (from `round_started` up to, excluding, `round_ended`)
+/// must not carry the reveal keys: the correct index and the distance appear in
+/// `round_ended` only (`correct`, `option`, `distance_km`).
+pub fn assert_fleches_round_safe(frames: &[String]) {
+    for frame in frames {
+        let json: serde_json::Value = serde_json::from_str(frame).unwrap();
+        for key in ["correct", "option", "distance_km"] {
+            assert!(
+                !contains_key(&json, key),
+                "the {key} reveal left the server before round_ended: {frame}"
+            );
+        }
+    }
 }
 
 /// `true` if the server closed this plain TCP socket within `within` (EOF or reset), `false`

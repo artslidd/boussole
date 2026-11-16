@@ -236,6 +236,7 @@ fn start_round(
             start,
             guesses: Vec::new(),
             progress,
+            answered: None,
         }),
         intermission: None,
     }));
@@ -1499,9 +1500,10 @@ fn eight_players_fit_in_the_results_at_the_minimum_window_size() {
     server.send(ServerMsg::RoundEnded(boussole_protocol::RoundEnded {
         round_index: 1,
         total_rounds: 3,
-        secret: "Besançon".into(),
+        secret: Some("Besançon".into()),
         found_by: None,
-        results,
+        results: Some(results),
+        fleches: None,
         next_round_in_ms: Some(8_000),
     }));
     ui.wait("the result", |ui| ui.screen() == OnlineScreen::Result);
@@ -1528,9 +1530,10 @@ fn eight_players_fit_in_the_final_ranking_at_the_minimum_window_size() {
     server.send(ServerMsg::RoundEnded(boussole_protocol::RoundEnded {
         round_index: 3,
         total_rounds: 3,
-        secret: "Besançon".into(),
+        secret: Some("Besançon".into()),
         found_by: None,
-        results: eight_player_results(),
+        results: Some(eight_player_results()),
+        fleches: None,
         next_round_in_ms: None,
     }));
     let ranking = eight_players()

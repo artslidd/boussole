@@ -107,11 +107,13 @@ pub struct RoundState {
 
 impl RoundState {
     fn new(start: &RoundStarted, now: Instant) -> Self {
+        // A Flèches round carries no try limit and no hints; the client renders it in
+        // ticket 10, so until then an empty round is shown (never a panic).
         Self {
             index: start.round_index,
             total: start.total_rounds,
-            max_tries: start.max_tries,
-            hints: start.hints.clone(),
+            max_tries: start.max_tries.unwrap_or(0),
+            hints: start.hints.clone().unwrap_or_default(),
             guesses: Vec::new(),
             progress: Vec::new(),
             clock: Clock::from_timer(start.timer, now),
@@ -285,6 +287,8 @@ pub fn apply(mut state: OnlineState, msg: ServerMsg, now: Instant) -> OnlineStat
             }
         }
         ServerMsg::GuessResult(info) => apply_guess(&mut state, info),
+        // Flèches Course progress (who answered, never what): the client UI is ticket 10.
+        ServerMsg::PlayerAnswered { .. } => {}
         ServerMsg::PlayerProgress(progress) => {
             if let Some(round) = state.room.as_mut().and_then(|r| r.round.as_mut()) {
                 upsert_progress(round, progress);

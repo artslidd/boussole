@@ -33,7 +33,7 @@ fn round_started_names_the_first_player_and_the_turn_timer() {
                 remaining_ms: TURN_MS
             }
         );
-        assert_eq!(started.hints.len(), 5);
+        assert_eq!(started.hints.as_ref().unwrap().len(), 5);
     }
 }
 
@@ -271,16 +271,18 @@ fn the_team_shares_six_tries() {
     for msgs in for_all(&last, &p) {
         assert_eq!(guess_results(&msgs).last().unwrap().tries_used, 6);
         let ended = round_ended(&msgs).expect("sixth miss loses the round");
-        assert_eq!(ended.secret, secret);
+        assert_eq!(ended.secret.as_deref(), Some(secret));
         assert_eq!(ended.found_by, None);
         assert!(
             ended
                 .results
+                .as_ref()
+                .unwrap()
                 .iter()
                 .all(|r| r.points == 0 && !r.solved && r.total == 0)
         );
         // Each player's own guesses are listed: two each, in turn order.
-        let mine: Vec<_> = ended.results[0]
+        let mine: Vec<_> = ended.results.as_ref().unwrap()[0]
             .guesses
             .iter()
             .map(|g| g.city.as_str())
@@ -308,10 +310,18 @@ fn team_points_are_100_times_7_minus_tries_and_the_finder_is_named() {
         assert!(
             ended
                 .results
+                .as_ref()
+                .unwrap()
                 .iter()
                 .all(|r| r.points == 400 && r.total == 400)
         );
-        let solved: Vec<_> = ended.results.iter().map(|r| r.solved).collect();
+        let solved: Vec<_> = ended
+            .results
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|r| r.solved)
+            .collect();
         assert_eq!(solved, [false, false, true]);
         assert_eq!(ended.next_round_in_ms, Some(INTERMISSION_MS));
         let snap = snapshot(&msgs).unwrap();
@@ -368,6 +378,8 @@ fn a_silent_table_loses_the_round_after_a_full_lap_of_timeouts() {
     assert!(
         ended
             .results
+            .as_ref()
+            .unwrap()
             .iter()
             .all(|r| r.points == 0 && r.tries_used == 0)
     );
@@ -404,7 +416,7 @@ fn a_lone_connected_player_keeps_taking_turns() {
     let outs = sim.guess(&p[0], secret);
     let ended = round_ended(&for_conn(&outs, p[0].conn)).unwrap();
     assert_eq!(ended.found_by, Some(p[0].id));
-    assert_eq!(ended.results[0].points, 500);
+    assert_eq!(ended.results.as_ref().unwrap()[0].points, 500);
 }
 
 #[test]

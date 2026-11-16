@@ -2,6 +2,18 @@
 
 use boussole_protocol::MAX_TRIES;
 
+/// Flèches Course points for a round answered after `elapsed_ms` of a `limit_ms`
+/// question: `100` when correct plus a speed bonus of `round(50 × remaining / limit)`
+/// (up to 50, linear on the time left); wrong or unanswered: 0.
+pub fn fleches_course_points(correct: bool, elapsed_ms: u64, limit_ms: u64) -> u32 {
+    if !correct {
+        return 0;
+    }
+    let limit_ms = limit_ms.max(1);
+    let left = limit_ms - elapsed_ms.min(limit_ms);
+    100 + (50.0 * (left as f64) / (limit_ms as f64)).round() as u32
+}
+
 /// Course points for a round solved with `tries` tries (1–6) after `elapsed_ms` of a
 /// `limit_ms` round: `100 × (7 − tries) + ⌊100 × (limit − elapsed) / limit⌋`.
 ///
@@ -62,6 +74,33 @@ mod tests {
     fn coop_points_follow_the_formula() {
         let all: Vec<u32> = (1..=6).map(coop_points).collect();
         assert_eq!(all, [600, 500, 400, 300, 200, 100]);
+    }
+
+    #[test]
+    fn fleches_course_points_follow_the_formula() {
+        let l = 15_000;
+        assert_eq!(fleches_course_points(false, 0, l), 0); // wrong: 0
+        assert_eq!(fleches_course_points(false, l, l), 0); // no answer: 0
+        assert_eq!(fleches_course_points(true, 0, l), 150); // theoretical max
+        assert_eq!(fleches_course_points(true, l, l), 100); // correct at the very limit
+        // Speed bonus = round(50 × remaining / limit), linear on the remaining time.
+        assert_eq!(fleches_course_points(true, 7_500, l), 100 + 25);
+        assert_eq!(fleches_course_points(true, 3_000, l), 100 + 40);
+        assert_eq!(fleches_course_points(true, 1_500, l), 100 + 45);
+        // Round-half-away: 50 × 0.01 = 0.5 → 1.
+        assert_eq!(fleches_course_points(true, 14_850, l), 100 + 1);
+        // 50 × 0.25 = 12.5 → 13 (round half away from zero).
+        assert_eq!(fleches_course_points(true, 11_250, l), 100 + 13);
+        assert_eq!(fleches_course_points(true, 999_999, l), 100); // clamped
+    }
+
+    #[test]
+    fn fleches_course_points_are_bounded_and_decrease_with_time() {
+        for e in (0..=15_000).step_by(97) {
+            let p = fleches_course_points(true, e, 15_000);
+            assert!((100..=150).contains(&p), "{e} {p}");
+            assert!(fleches_course_points(true, e + 1_000, 15_000) <= p);
+        }
     }
 
     #[test]

@@ -158,8 +158,21 @@ impl Sim {
         self.send(c.conn, ClientMsg::Guess { city: city.into() })
     }
 
+    /// A Flèches `answer { option }`.
+    pub fn answer(&mut self, c: &Client, option: u8) -> Vec<Outbound> {
+        self.send(c.conn, ClientMsg::Answer { option })
+    }
+
     pub fn secret(&self, code: &str) -> &'static str {
         self.engine.debug_secret(code).expect("a round is active")
+    }
+
+    /// The Flèches question in progress (tests only: the correct index and distance must
+    /// never appear on the wire before `round_ended`).
+    pub fn fleches(&self, code: &str) -> boussole_core::arrows::ArrowQuestion {
+        self.engine
+            .debug_fleches(code)
+            .expect("a fleches round is active")
     }
 }
 
@@ -177,6 +190,25 @@ pub fn course(rounds: u32) -> RoomConfig {
 
 pub fn coop(rounds: u32) -> RoomConfig {
     RoomConfig {
+        rounds,
+        turn_time_s: 30,
+        ..cfg(Mode::Cooperation, Difficulty::Facile)
+    }
+}
+
+/// A Flèches Course room: `question_time_s` defaults to 15 s.
+pub fn fleches_course(rounds: u32) -> RoomConfig {
+    RoomConfig {
+        game: GameKind::Fleches,
+        rounds,
+        ..cfg(Mode::Course, Difficulty::Facile)
+    }
+}
+
+/// A Flèches Coopération room.
+pub fn fleches_coop(rounds: u32) -> RoomConfig {
+    RoomConfig {
+        game: GameKind::Fleches,
         rounds,
         turn_time_s: 30,
         ..cfg(Mode::Cooperation, Difficulty::Facile)

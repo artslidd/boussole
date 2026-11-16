@@ -1,10 +1,15 @@
-# Boussole multiplayer protocol (version 1)
+# Boussole multiplayer protocol (version 2)
 
 This document, the `boussole-protocol` crate and the golden JSON fixtures in
 `crates/boussole-protocol/tests/fixtures/` are the **source of truth** for the server
 (`boussole-server`) and the client. Every JSON example below is a fixture quoted verbatim;
 a test fails if the two drift apart. The rules are implemented, with tests, by the pure engine
 in `crates/boussole-server/src/engine/`.
+
+Version 2 (this document) added the **Flèches** game — rooms pick it with `config.game`
+(§4) — alongside the original **Devinette**; everything Devinette behaves exactly as in
+version 1 apart from the `hello` version (§12). Flèches is specified in §17; the sections
+in between describe the shared protocol, with pointers where Flèches differs.
 
 - [1. Transport](#1-transport)
 - [2. Conventions](#2-conventions)
@@ -22,6 +27,7 @@ in `crates/boussole-server/src/engine/`.
 - [14. Notes for the server transport (04)](#14-notes-for-the-server-transport-04)
 - [15. Notes for the client (05)](#15-notes-for-the-client-05)
 - [16. Clarifications and deviations from ticket 03](#16-clarifications-and-deviations-from-ticket-03)
+- [17. Flèches — the arrow game (version 2)](#17-flèches--the-arrow-game-version-2)
 
 ## 1. Transport
 
@@ -89,13 +95,13 @@ stateDiagram-v2
 Example `hello`, first connection:
 
 ```json
-{"type":"hello","protocol_version":1,"dataset_fingerprint":"9907ec8ae376fbf8","nickname":"Alice"}
+{"type":"hello","protocol_version":2,"dataset_fingerprint":"9907ec8ae376fbf8","nickname":"Alice"}
 ```
 
 `hello` carrying the token of a dropped session:
 
 ```json
-{"type":"hello","protocol_version":1,"dataset_fingerprint":"9907ec8ae376fbf8","nickname":"Alice","resume_token":"3f9a1c5e7b2d4086a1b3c5d7e9f01234"}
+{"type":"hello","protocol_version":2,"dataset_fingerprint":"9907ec8ae376fbf8","nickname":"Alice","resume_token":"3f9a1c5e7b2d4086a1b3c5d7e9f01234"}
 ```
 
 `welcome` (keep `resume_token` secret and in memory or a private file; it is the session
@@ -133,13 +139,18 @@ stateDiagram-v2
   |---|---|---|
   | `mode` | `course` · `cooperation` | — |
   | `difficulty` | `facile` (hint distances sent) · `difficile` (no distances) | — |
+  | `game` | `devinette` · `fleches` (§17) | `devinette` |
   | `rounds` | 1–10 | 5 |
   | `max_players` | 2–8 | 8 |
   | `round_time_s` | 60–300 (Course) | 120 |
   | `turn_time_s` | 15–120 (Coopération) | 45 |
+  | `question_time_s` | 5–60 (Flèches) | 15 |
 
-  All four numbers are range-checked whatever the mode. They are unsigned 32-bit on the wire,
-  so `0` or `4000000000` is `invalid_config`, while `-1` or `1.5` is `bad_message`.
+  All numbers are range-checked whatever the mode or game. They are unsigned 32-bit on
+  the wire, so `0` or `4000000000` is `invalid_config`, while `-1` or `1.5` is
+  `bad_message`. The two game settings are **omitted on the wire when they carry their
+  default** (`game: devinette`, `question_time_s: 15`): a config without `game` is a
+  Devinette room, and a version-1 config parses unchanged.
 - **Join.** `join_room { code }`. Refused with `room_not_found` (no such room or malformed
   code), `match_in_progress` (the room is not in `Lobby`; there is no mid-match join),
   `room_full` (members, **including players whose socket is down but whose slot is held**,
@@ -171,7 +182,8 @@ stateDiagram-v2
 | `leave_room` | — | in a room | `invalid_state` |
 | `update_config` | `config` | host, lobby | `not_host`, `invalid_state`, `invalid_config` |
 | `start_match` | — | host, lobby | `not_host`, `invalid_state`, `not_enough_players` |
-| `guess` | `city` | round active (see §7) | `invalid_state`, `round_over`, `not_your_turn`, `unknown_city`, `already_guessed` |
+| `guess` | `city` | round active (see §7), Devinette room | `invalid_state`, `round_over`, `not_your_turn`, `unknown_city`, `already_guessed` |
+| `answer` | `option` | question active (see §17), Flèches room | `invalid_state`, `round_over`, `not_your_turn`, `invalid_option` |
 | `ping` | — | any time, even before `hello` | — |
 
 Any message may also draw `bad_message` (undecodable frame) or `rate_limited` (sent by the
@@ -179,6 +191,12 @@ transport only; the engine never emits it).
 
 ```json
 {"type":"create_room","config":{"mode":"course","difficulty":"facile","rounds":3,"max_players":4,"round_time_s":90,"turn_time_s":45}}
+```
+
+A Flèches room (the two new settings shown explicitly):
+
+```json
+{"type":"create_room","config":{"mode":"course","difficulty":"facile","game":"fleches","rounds":3,"max_players":4,"round_time_s":90,"turn_time_s":45,"question_time_s":30}}
 ```
 
 ```json
@@ -201,6 +219,12 @@ transport only; the engine never emits it).
 {"type":"guess","city":"Saint-Étienne"}
 ```
 
+The Flèches answer (§17): pick one of the four arrows by its index, `0`–`3`:
+
+```json
+{"type":"answer","option":2}
+```
+
 ```json
 {"type":"ping"}
 ```
@@ -213,7 +237,7 @@ Every state change produces messages in **two layers**, always in this order for
 connection within one server step (one received message, one disconnection or one timer):
 
 1. direct replies, errors and **events** (`round_started`, `guess_result`, `player_progress`,
-   `turn_changed`, `round_ended`, `match_ended`) in causal order;
+   `player_answered`, `turn_changed`, `round_ended`, `match_ended`) in causal order;
 2. **at most one `room_snapshot`** per room whose room-level state changed, describing the
    state *after* the step.
 
@@ -221,8 +245,8 @@ A `room_snapshot` is the **full state of the room for its receiver** and replace
 client knew. It is sent on: room creation, join, leave, host change, connect/disconnect/resume
 of any member, configuration update, round start, round end, match end, abandonment of a
 match, and when a player resumes (to that player too, with their round state). It is **not**
-sent after a plain `guess_result`, `player_progress` or a `turn_changed` caused by a guess or a
-timeout: those events carry everything needed. Events are applied on top of the last snapshot
+sent after a plain `guess_result`, `player_progress`, `player_answered` or a `turn_changed`
+caused by a guess or a timeout: those events carry everything needed. Events are applied on top of the last snapshot
 and are always consistent with the next one.
 
 ### 6.2 `welcome`
@@ -249,6 +273,8 @@ intermission?   present iff phase == intermission
     the team's guesses, in order, each with its author (`by`).
   - `progress`: Course — one entry per player (tries used / solved / out of tries), no city
     names. Coopération — empty.
+  - `answered` (Flèches Course only, §17): the players who have answered this question, in
+    join order — never what they answered.
 - `intermission`: `next_round_index`, `remaining_ms` until it starts, and `last_round`, the
   `round_ended` that opened the pause (its `next_round_in_ms` equals `remaining_ms`).
 - In `lobby` after a match, neither `round` nor `intermission` is present.
@@ -508,8 +534,9 @@ number of rounds in which a player made the winning guess (`solved_rounds`).
   its `welcome`. The server answers `welcome { resumed: true }` (same `player_id`, same
   token) and a full `room_snapshot` **including the player's current round state**: in
   Course their own guesses and everybody's progress; in Coopération the team's guesses and the
-  current turn; during an intermission the round that just ended. Other members see them as
-  connected again.
+  current turn; in a Flèches round the question and who has answered (Course) or whose turn
+  it is (Coopération, §17); during an intermission the round that just ended. Other members
+  see them as connected again.
 - After 60 s the player is removed exactly as if they had sent `leave_room` (host transfer,
   turn pass, round-end checks, snapshots). Their token no longer works: a `hello` carrying it
   creates a new player (`resumed: false`).
@@ -524,7 +551,7 @@ number of rounds in which a player made the winning guess (`solved_rounds`).
 
 | `code` | French message | Raised when | Connection |
 |---|---|---|---|
-| `bad_version` | Version du protocole incompatible : mettez le jeu à jour. | `hello.protocol_version` ≠ 1 | closed |
+| `bad_version` | Version du protocole incompatible : mettez le jeu à jour. | `hello.protocol_version` ≠ 2 | closed |
 | `dataset_mismatch` | La liste des villes du client ne correspond pas à celle du serveur. | `hello.dataset_fingerprint` differs | closed |
 | `bad_message` | Message illisible. | invalid JSON, unknown `type`, bad field, frame > 4096 bytes | kept (closed if oversized) |
 | `invalid_state` | Action impossible à ce moment. | message not allowed in the current state; first message not `hello` (then closed); second `hello`; connection taken over (old socket, then closed) | kept |
@@ -539,15 +566,22 @@ number of rounds in which a player made the winning guess (`solved_rounds`).
 | `not_your_turn` | Ce n’est pas votre tour. | Coopération `guess` by a non-active player | kept |
 | `unknown_city` | Ville inconnue. | `guess` not matching any city | kept |
 | `already_guessed` | Cette ville a déjà été proposée. | duplicate guess (Course: own guesses; Coopération: the team's) | kept |
-| `round_over` | La manche est terminée. | `guess` after the player is done, or during an intermission | kept |
+| `invalid_option` | Flèche invalide : choisissez entre 1 et 4. | Flèches `answer` with `option` outside 0–3 | kept |
+| `round_over` | La manche est terminée. | `guess` after the player is done, a Flèches `answer` after the player answered or the question is over, or during an intermission | kept |
 | `rate_limited` | Trop de messages : ralentissez. | emitted by the transport's rate limiter only | transport's choice |
 
 ## 12. Versioning and dataset
 
-- `PROTOCOL_VERSION` is `1`. Any change a version-1 peer could not process (new required
+- `PROTOCOL_VERSION` is `2`. Any change a version-2 peer could not process (new required
   field, changed meaning, removed message) bumps it; the server refuses other versions with
   `bad_version`. Additive, optional changes keep the version thanks to the
   ignore-unknown-fields rule.
+- **Version 2** (ticket 09) added the Flèches game (§17): the new `config.game` and
+  `config.question_time_s` settings, the `answer` client message, the `player_answered`
+  server message, the Flèches payloads of `round_started` / `round_ended` / snapshots, and
+  the `invalid_option` error. A version-1 peer could not render a Flèches room, so the
+  version was bumped rather than relying on defaults; every other message and a default
+  (Devinette) config are unchanged from version 1.
 - Cities are identified by **name**, so client and server must embed the same dataset.
   `boussole_core::dataset_fingerprint()` is a FNV-1a (64-bit) hash over every city's name
   bytes, a `0xFF` separator, and `lat` / `lon` as little-endian IEEE-754 bits, in order. It is
@@ -570,9 +604,17 @@ number of rounds in which a player made the winning guess (`solved_rounds`).
 - In `difficile`, no hint distance is ever sent (`distance_km` absent from `round_started` and
   from the hints inside snapshots). Guess feedback distances are part of the game and are
   sent in both difficulties.
-- The engine test suite serialises every outbound message of 200 simulated matches (both
-  modes, both difficulties, random disconnections) and checks all of the above; it also
-  throws more than 10 000 random messages at the engine.
+- **Flèches**: the correct index and the distance `origin → target` appear in **no**
+  message before the `round_ended` that reveals them. Before that, a Flèches round exposes
+  only the question (`origin`, `target`, the four `options_deg`), who has answered
+  (`player_answered`, `answered` in snapshots) and the timers. The same friendly-game
+  caveat as Devinette applies and is accepted: a modified client knows the dataset, so it
+  can compute the true bearing `origin → target` itself and pick the matching arrow. The
+  server never confirms anything until `round_ended`.
+- The engine test suite serialises every outbound message of 200 simulated Devinette
+  matches and 80 Flèches matches (both modes, both difficulties, random disconnections) and
+  checks all of the above; it also throws more than 10 000 random messages at the engine,
+  including Flèches rooms and answers.
 - Round seeds and resume tokens come from the injected `Entropy`; in production it must be a
   cryptographically secure source.
 
@@ -713,3 +755,203 @@ first group deviates from the ticket text; the rest clarifies it.
     shows the same rounding).
 16. `rate_limited` is reserved for the transport; the engine never produces it.
 17. The ticket mentions 93 pre-existing tests; `main` (`f2a2e8e`) actually had 101.
+
+## 17. Flèches — the arrow game (version 2)
+
+A Flèches room plays the arrow game of `boussole_core::arrows`: each round (there is
+no try limit, one answer per player) is **one question** — from a named start city, pick
+which of four arrows points at a named target city. Everything else about rooms, rounds,
+intermissions, abandonment, resume and snapshots (§4, §7, §10) is shared with Devinette;
+this section only describes what Flèches changes.
+
+- [17.1 Questions on the wire](#171-questions-on-the-wire)
+- [17.2 Answering](#172-answering)
+- [17.3 Course](#173-course)
+- [17.4 Coopération](#174-coopération)
+- [17.5 End of a question](#175-end-of-a-question)
+- [17.6 Scoring and ranking](#176-scoring-and-ranking)
+- [17.7 Timers](#177-timers)
+- [17.8 Resume and mid-question events](#178-resume-and-mid-question-events)
+- [17.9 Secret safety](#179-secret-safety)
+- [17.10 Notes for the client (ticket 10)](#1710-notes-for-the-client-ticket-10)
+
+### 17.1 Questions on the wire
+
+A `round_started` carries `question` instead of `max_tries` and `hints` (both absent —
+never `null`):
+
+- `question.origin`: start city, at the centre of the dial ("De Lyon vers Brest ?" shows
+  `origin: "Lyon"`, `target: "Brest"`).
+- `question.target`: the city to aim at.
+- `question.options_deg`: the four option bearings in display order, each
+  `0.0 ≤ deg < 360.0` rounded to 0.1°. Exactly one of them is the true bearing
+  `origin → target`; the engine guarantees the four are pairwise at least 25° apart (60°
+  in `facile`) and that, in `difficile`, at least one distractor lies within 25–45° of the
+  truth. The correct position among the four is uniformly distributed (verified over
+  10 000 seeded games per level in `boussole-core`).
+
+Course (the `timer` is the question clock; `remaining_ms` counts down
+`question_time_s`):
+
+```json
+{"type":"round_started","round_index":1,"total_rounds":3,"question":{"origin":"Lyon","target":"Brest","options_deg":[21.7,111.7,291.7,201.7]},"timer":{"kind":"round","remaining_ms":30000}}
+```
+
+Coopération (the `timer` names the one player who may answer; the clock is again
+`question_time_s`):
+
+```json
+{"type":"round_started","round_index":2,"total_rounds":3,"question":{"origin":"Lyon","target":"Brest","options_deg":[21.7,111.7,291.7,201.7]},"timer":{"kind":"turn","player_id":2,"remaining_ms":15000}}
+```
+
+The question of a round in progress is also inside every `room_snapshot` of that round
+(`round.start.question`), with the timer updated to the current remaining time, so a
+resuming client rebuilds the dial from the snapshot alone.
+
+**Generation.** Question *r* (1-based) of a match is
+`boussole_core::arrows::ArrowQuestion::new_random(difficulty, seed)` with
+`seed = room_seed + r`, where `room_seed` is drawn from the server's entropy at each
+`start_match`; no two consecutive rounds of a match repeat the same origin/target pair (a
+clash is redrawn from the entropy stream). Replaying the same `room_seed` therefore replays
+the same questions.
+
+### 17.2 Answering
+
+The client message is `answer { option }` with an option index `0..=3` matching
+`options_deg` (the wire is 0-based; the UI labels the arrows 1–4). The validation order
+mirrors `guess` (§7):
+
+- Not in an active question: `lobby` → `invalid_state`, `intermission` → `round_over`.
+- `answer` in a **Devinette** room (and `guess` in a Flèches room) → `invalid_state`.
+- Course: `round_over` when the player already answered this question, then
+  `invalid_option` for an index outside 0–3.
+- Coopération: `not_your_turn` first, then `invalid_option`.
+- Nothing is recorded by a refused answer.
+
+```json
+{"type":"answer","option":2}
+```
+
+### 17.3 Course
+
+Every connected player answers the same question once. An accepted answer is broadcast to
+the whole room (answerer included) as `player_answered` — **who** answered, never what:
+
+```json
+{"type":"player_answered","player_id":1}
+```
+
+Like `player_progress` in Devinette, no snapshot follows a plain `player_answered`: the
+event carries everything needed. The round ends when every **connected** player has
+answered, or when `question_time_s` elapses; a player who leaves mid-question does not hold
+the round up (the round ends as soon as the remaining connected players answered). A player
+may reconnect mid-question and still answer (their slot, and the round, are kept).
+
+### 17.4 Coopération
+
+The team gets **one answer per question** from a single answerer: question *r* (1-based)
+is answered by the `(r − 1) mod n`-th connected player in join order — the same rotation as
+Devinette turns. Only the answerer may send `answer` (`not_your_turn` otherwise). The
+answer ends the question at once, whatever it is. If the answerer's time (`question_time_s`)
+runs out, the question counts as **wrong** — unlike Devinette there is no AFK lap, because a
+timeout already settles the question. If the answerer disconnects or leaves mid-question,
+`turn_changed { reason: "disconnect" }` hands the question to the next connected player
+(§6.7), with a fresh `question_time_s`.
+
+### 17.5 End of a question
+
+`round_ended` carries `fleches` instead of `secret` and `results` (both absent — never
+`null`): the correct index, the distance in whole kilometres, the compass label of the
+correct arrow (`Compass8::label_fr`: `"N"`, `"NE"`, `"E"`, `"SE"`, `"S"`, `"SO"`, `"O"`,
+`"NO"`), and one entry per player present at the end of the round, in join order:
+
+- `answers[].option`: the player's choice; **absent** when they did not answer in time.
+- `answers[].correct`: whether that choice was the correct arrow.
+- `answers[].points` / `answers[].total`: the round points and the match total (in
+  Coopération both are the team's, identical on every entry).
+- `found_by` (Coopération): the answerer when the team was right.
+
+Course:
+
+```json
+{"type":"round_ended","round_index":1,"total_rounds":3,"fleches":{"correct":2,"distance_km":736,"compass":"O","answers":[{"player_id":1,"option":2,"correct":true,"points":137,"total":137},{"player_id":2,"option":0,"correct":false,"points":0,"total":0}]},"next_round_in_ms":8000}
+```
+
+Coopération (Bob answered right: the team earns its point):
+
+```json
+{"type":"round_ended","round_index":1,"total_rounds":3,"found_by":2,"fleches":{"correct":2,"distance_km":736,"compass":"O","answers":[{"player_id":1,"correct":false,"points":1,"total":1},{"player_id":2,"option":2,"correct":true,"points":1,"total":1}]},"next_round_in_ms":8000}
+```
+
+Intermissions (8 s), `match_ended`, host transfer and room deletion behave exactly like
+Devinette (§7). `match_ended` reuses the existing `ranking` fields: Course sorts by
+`total` with competition ranking; Coopération shows the team total on every row, all
+`rank: 1`, ordered by `solved_rounds` (questions a player answered correctly).
+
+### 17.6 Scoring and ranking
+
+**Course** (per player, per question): `100` for a correct answer plus a speed bonus
+`round(50 × remaining / question_time_s)` where `remaining` is the question time left at
+the answer, in ms. A correct answer is therefore worth 100–150 (100 + 0 at the very
+deadline, 150 in the limit at time 0); a wrong or missing answer scores 0. The match total
+is the sum over rounds. `solved_rounds` counts correct answers.
+
+**Coopération** (team): one point per correctly answered question, 0 otherwise; the team
+total is shown as every player's `score` and `total`. `solved_rounds` counts the questions
+in which that player gave the team's correct answer.
+
+### 17.7 Timers
+
+| Timer | Duration | Starts | On expiry |
+|---|---|---|---|
+| Question time (Course) | `question_time_s` (5–60 s) | `round_started` | `round_ended`; unanswered players score 0 |
+| Question time (Coopération) | `question_time_s` (5–60 s) | `round_started`, and each `turn_changed` after a disconnect | the question is lost (wrong), `round_ended` |
+
+Both run on the server's monotonic clock like every other timer (§8); a late answer sees
+the timeout that preceded it and is refused with `round_over`.
+
+### 17.8 Resume and mid-question events
+
+A player who reconnects mid-question (or during the intermission) receives the usual
+snapshot (§10): `round.start.question` rebuilds the dial, `round.answered` (Course only)
+lists the players who already answered in join order — so a client knows whether **you**
+already answered — and in Coopération the `timer` names the current answerer. Outside
+`room_snapshot`s, the only mid-question events are `player_answered` (Course) and
+`turn_changed` (Coopération, on a disconnect of the answerer); they never carry a choice,
+a correctness or a distance.
+
+A snapshot of a Flèches Course round in progress (Alice answered, Bob's socket is down;
+`progress` and `guesses` are always empty in Flèches):
+
+```json
+{"type":"room_snapshot","code":"K7QX2","config":{"mode":"course","difficulty":"difficile","game":"fleches","rounds":3,"max_players":4,"round_time_s":90,"turn_time_s":45},"phase":"round_active","players":[{"id":1,"nickname":"Alice","host":true,"connected":true,"score":0},{"id":2,"nickname":"Bob","host":false,"connected":false,"score":0}],"round":{"start":{"round_index":1,"total_rounds":3,"question":{"origin":"Lyon","target":"Brest","options_deg":[21.7,111.7,291.7,201.7]},"timer":{"kind":"round","remaining_ms":9750}},"guesses":[],"progress":[],"answered":[1]}}
+```
+
+### 17.9 Secret safety
+
+The correct index and the distance appear in **no** frame before the `round_ended` of their
+question: the question carries only the four bearings, `player_answered` and `answered`
+carry only player ids. The engine tests serialise every outbound frame of 80 simulated
+Flèches matches and assert this on every frame (see §13 for the shared caveat: a modified
+client that embeds the dataset can compute the bearing `origin → target` itself; that is
+accepted, exactly as for Devinette).
+
+### 17.10 Notes for the client (ticket 10)
+
+- Learn the game from `room_snapshot.config.game` (absent = devinette). Everything
+  Flèches-specific hangs off that: `question` in round starts, `answer`/`player_answered`
+  instead of `guess`/`guess_result`/`player_progress`, `fleches` in `round_ended`.
+- Round fields are game-specific and **optional**: read `question` when present, otherwise
+  `hints`/`max_tries`; read `fleches` when present, otherwise `secret`/`results`. Absent
+  never means `null`.
+- Lock the answer UI after **your** answer is accepted: your own `player_answered` (Course)
+  or the question ending (Coopération). Track who answered from `player_answered` events
+  and `answered` in snapshots.
+- Display the four arrows of `options_deg` around the origin; the reveal screen uses
+  `fleches.correct` (highlight the arrow, index 0 = arrow 1), `distance_km` and `compass`
+  as the solo mode does, plus each player's `option`/`correct`/`points`.
+- The question clock is `question_time_s`, shown like any `remaining_ms` (§2, §15); in
+  Coopération the `timer`'s `player_id` is who answers, and `turn_changed` with reason
+  `disconnect` moves it.
+- Pre-validate a Flèches room config with `RoomConfig::validate` as for Devinette
+  (`question_time_s` 5–60, default 15).

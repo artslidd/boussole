@@ -48,8 +48,8 @@ fn leaks(msg: &ServerMsg, secret: &str) -> bool {
 
 fn hints_in(msg: &ServerMsg) -> Option<&Vec<HintDto>> {
     match msg {
-        ServerMsg::RoundStarted(r) => Some(&r.hints),
-        ServerMsg::RoomSnapshot(s) => s.round.as_ref().map(|r| &r.start.hints),
+        ServerMsg::RoundStarted(r) => r.hints.as_ref(),
+        ServerMsg::RoomSnapshot(s) => s.round.as_ref().and_then(|r| r.start.hints.as_ref()),
         _ => None,
     }
 }
@@ -269,6 +269,11 @@ fn random_config(rng: &mut Rng) -> RoomConfig {
         } else {
             Mode::Cooperation
         },
+        game: if rng.chance(50) {
+            GameKind::Devinette
+        } else {
+            GameKind::Fleches
+        },
         difficulty: if rng.chance(50) {
             Difficulty::Facile
         } else {
@@ -278,6 +283,7 @@ fn random_config(rng: &mut Rng) -> RoomConfig {
         max_players: pick(rng, MAX_PLAYERS_RANGE),
         round_time_s: pick(rng, ROUND_TIME_S_RANGE),
         turn_time_s: pick(rng, TURN_TIME_S_RANGE),
+        question_time_s: pick(rng, QUESTION_TIME_S_RANGE),
     }
 }
 
@@ -413,7 +419,10 @@ fn fuzz(seed: u64, steps: usize) -> usize {
                         };
                         ClientMsg::Guess { city }
                     }
-                    12 => ClientMsg::Ping,
+                    12 => ClientMsg::Answer {
+                        // 0–3 are valid options; 4–5 probe the invalid_option path.
+                        option: rng.below(6) as u8,
+                    },
                     _ => ClientMsg::hello("Player0", None),
                 };
                 sim.send(conn, msg)

@@ -80,6 +80,9 @@ enum Intent {
 }
 
 /// What other threads hand to the UI thread.
+// An event is moved once through a channel and handled on arrival: its size is irrelevant
+// at a few messages per second, and boxing would only add noise to every match arm.
+#[allow(clippy::large_enum_variant)]
 enum Inbound {
     Net {
         session: u64,

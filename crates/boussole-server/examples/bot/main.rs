@@ -5,6 +5,8 @@
 //!     --url ws://192.168.1.20:7878/ws --create --mode course --players 3 --nickname Ada
 //! cargo run --release -p boussole-server --example bot -- \
 //!     --url ws://192.168.1.20:7878/ws --room K7QX2 --nickname Bob
+//! cargo run --release -p boussole-server --example bot -- \
+//!     --url ws://192.168.1.20:7878/ws --create --game fleches --mode course --skill 80 --players 3
 //! ```
 //!
 //! The creating bot prints `ROOM <code>` and starts the match once `--players` are in the
@@ -13,8 +15,8 @@
 mod strategy;
 
 use boussole_protocol::{
-    ClientMsg, Difficulty, ErrorCode, MAX_TRIES, Mode, RoomConfig, ServerMsg, Timer, decode_server,
-    encode_client,
+    ClientMsg, Difficulty, ErrorCode, GameKind, MAX_TRIES, Mode, RoomConfig, ServerMsg, Timer,
+    decode_server, encode_client,
 };
 use futures_util::{SinkExt, StreamExt};
 use std::process::ExitCode;
@@ -30,11 +32,13 @@ usage: bot --url <ws://host:port/ws> (--create | --room <CODE>) [options]
   --create             create the room (and start the match once enough players joined)
   --room <code>        join this room
   --nickname <name>    default Bot<pid>
+  --game <g>           devinette | fleches (create only, default devinette)
   --mode <m>           course | coop (create only, default course)
   --difficulty <d>     facile | difficile (create only, default facile)
+  --skill <p>          Flèches: answer correctly with probability p % (default 50)
   --rounds <n>         1-10 (create only, default 2)
   --players <n>        start when n players are in the room (create only, default 2)
-  --think-ms <n>       pause before each guess (default 300)
+  --think-ms <n>       pause before each guess or answer (default 300)
   --wait-s <n>         give up if the match has not started after n seconds (default 120);
                        with --create this is how long to wait for --players players
   --seed <n>           random seed (default: from the nickname)";
@@ -44,8 +48,11 @@ struct Args {
     create: bool,
     room: Option<String>,
     nickname: String,
+    game: GameKind,
     mode: Mode,
     difficulty: Difficulty,
+    /// Probability (0–100 %) of answering a Flèches question correctly.
+    skill: u32,
     rounds: u32,
     players: usize,
     think: Duration,
@@ -59,8 +66,10 @@ fn parse_args() -> Result<Args, String> {
         create: false,
         room: None,
         nickname: format!("Bot{}", std::process::id() % 1000),
+        game: GameKind::Devinette,
         mode: Mode::Course,
         difficulty: Difficulty::Facile,
+        skill: 50,
         rounds: 2,
         players: 2,
         think: Duration::from_millis(300),
@@ -76,6 +85,22 @@ fn parse_args() -> Result<Args, String> {
             "--create" => a.create = true,
             "--room" => a.room = Some(value("--room")?),
             "--nickname" => a.nickname = value("--nickname")?,
+            "--game" => {
+                a.game = match value("--game")?.as_str() {
+                    "devinette" => GameKind::Devinette,
+                    "fleches" => GameKind::Fleches,
+                    other => return Err(format!("unknown game {other:?}")),
+                }
+            }
+            "--skill" => {
+                let s: u32 = value("--skill")?
+                    .parse()
+                    .map_err(|e| format!("--skill: {e}"))?;
+                if s > 100 {
+                    return Err("--skill must be 0-100".into());
+                }
+                a.skill = s;
+            }
             "--mode" => {
                 a.mode = match value("--mode")?.as_str() {
                     "course" => Mode::Course,
@@ -190,6 +215,18 @@ async fn guess(
     request(ws, pending, ClientMsg::Guess { city }).await
 }
 
+/// Send the Flèches answer for `question` (see [`request`]).
+async fn answer(
+    ws: &mut Ws,
+    strat: &mut Strategy,
+    question: &boussole_protocol::FlechesQuestion,
+    skill: u32,
+    pending: &mut Option<ClientMsg>,
+) -> Result<(), String> {
+    let option = strat.answer_fleches(question, skill);
+    request(ws, pending, ClientMsg::Answer { option }).await
+}
+
 async fn play(args: Args) -> Result<(), String> {
     let tag = format!("[{}]", args.nickname);
     let (mut ws, _) = connect_async(&args.url)
@@ -201,8 +238,12 @@ async fn play(args: Args) -> Result<(), String> {
     let mut strat = Strategy::new(args.seed);
     let mut joined = false;
     let mut started = false;
-    // Course or Coopération is the room's setting: learned from the first round_started.
+    // Course or Coopération is the room's setting, learned from the first `round_started`
+    // (a Flèches round carries a `question` instead of hints, so the current question is
+    // all the bot needs to tell the games apart).
     let mut course = args.mode == Mode::Course;
+    let mut question: Option<boussole_protocol::FlechesQuestion> = None;
+    let skill = args.skill;
     let think = args.think;
     let mut pending: Option<ClientMsg> = None;
     let mut round_seen = false;
@@ -233,6 +274,7 @@ async fn play(args: Args) -> Result<(), String> {
                 let first = if args.create {
                     ClientMsg::CreateRoom {
                         config: RoomConfig {
+                            game: args.game,
                             rounds: args.rounds,
                             ..RoomConfig::new(args.mode, args.difficulty)
                         },
@@ -273,23 +315,42 @@ async fn play(args: Args) -> Result<(), String> {
                 }
             }
             ServerMsg::RoundStarted(r) => {
-                println!(
-                    "{tag} round {}/{} started ({} hints)",
-                    r.round_index,
-                    r.total_rounds,
-                    r.hints.len()
-                );
-                strat.reset();
                 round_seen = true;
                 pending = None;
-                course = matches!(r.timer, Timer::Round { .. });
-                let my_turn = match r.timer {
-                    Timer::Round { .. } => true,
-                    Timer::Turn { player_id, .. } => player_id == me,
-                };
-                if my_turn {
-                    tokio::time::sleep(think).await;
-                    guess(&mut ws, &mut strat, &mut pending).await?;
+                question = r.question.clone();
+                if let Some(q) = &question {
+                    println!(
+                        "{tag} round {}/{} started (Flèches : {} → {})",
+                        r.round_index, r.total_rounds, q.origin, q.target
+                    );
+                    strat.reset();
+                    course = matches!(r.timer, Timer::Round { .. });
+                    let my_turn = match r.timer {
+                        Timer::Round { .. } => true,
+                        Timer::Turn { player_id, .. } => player_id == me,
+                    };
+                    if my_turn {
+                        tokio::time::sleep(think).await;
+                        let q = question.clone().expect("just set");
+                        answer(&mut ws, &mut strat, &q, skill, &mut pending).await?;
+                    }
+                } else {
+                    println!(
+                        "{tag} round {}/{} started ({} hints)",
+                        r.round_index,
+                        r.total_rounds,
+                        r.hints.as_ref().map_or(0, Vec::len)
+                    );
+                    strat.reset();
+                    course = matches!(r.timer, Timer::Round { .. });
+                    let my_turn = match r.timer {
+                        Timer::Round { .. } => true,
+                        Timer::Turn { player_id, .. } => player_id == me,
+                    };
+                    if my_turn {
+                        tokio::time::sleep(think).await;
+                        guess(&mut ws, &mut strat, &mut pending).await?;
+                    }
                 }
             }
             ServerMsg::GuessResult(g) => {
@@ -313,20 +374,51 @@ async fn play(args: Args) -> Result<(), String> {
                     }
                 }
             }
+            ServerMsg::PlayerAnswered { player_id } => {
+                if player_id == me {
+                    pending = None;
+                }
+                println!("{tag} player {player_id} answered");
+            }
             ServerMsg::TurnChanged { player_id, .. } if player_id == me => {
                 tokio::time::sleep(think).await;
-                guess(&mut ws, &mut strat, &mut pending).await?;
+                if let Some(q) = question.clone() {
+                    answer(&mut ws, &mut strat, &q, skill, &mut pending).await?;
+                } else {
+                    guess(&mut ws, &mut strat, &mut pending).await?;
+                }
             }
             ServerMsg::RoundEnded(e) => {
-                let mine = e.results.iter().find(|r| r.player_id == me);
-                println!(
-                    "{tag} round {}/{} ended: secret {}, my points {}, my total {}",
-                    e.round_index,
-                    e.total_rounds,
-                    e.secret,
-                    mine.map_or(0, |r| r.points),
-                    mine.map_or(0, |r| r.total)
-                );
+                question = None;
+                let mine = e
+                    .results
+                    .as_ref()
+                    .and_then(|rs| rs.iter().find(|r| r.player_id == me));
+                if let Some(reveal) = &e.fleches {
+                    let mine = reveal
+                        .answers
+                        .iter()
+                        .find(|a| a.player_id == me)
+                        .expect("a result per player");
+                    println!(
+                        "{tag} round {}/{} ended: la bonne flèche était n°{} ({} km, cap {}), {}",
+                        e.round_index,
+                        e.total_rounds,
+                        reveal.correct + 1,
+                        reveal.distance_km,
+                        reveal.compass,
+                        if mine.correct { "trouvé !" } else { "raté" }
+                    );
+                } else {
+                    println!(
+                        "{tag} round {}/{} ended: secret {}, my points {}, my total {}",
+                        e.round_index,
+                        e.total_rounds,
+                        e.secret.as_deref().unwrap_or("?"),
+                        mine.map_or(0, |r| r.points),
+                        mine.map_or(0, |r| r.total)
+                    );
+                }
             }
             ServerMsg::MatchEnded(m) => {
                 let ranking: Vec<String> = m
@@ -357,6 +449,7 @@ async fn play(args: Args) -> Result<(), String> {
                 // Races with timers or teammates are part of the game.
                 ErrorCode::NotYourTurn
                 | ErrorCode::AlreadyGuessed
+                | ErrorCode::InvalidOption
                 | ErrorCode::RoundOver
                 | ErrorCode::UnknownCity => {
                     pending = None;

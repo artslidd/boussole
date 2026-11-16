@@ -29,7 +29,7 @@ use boussole_protocol::{
     RESUME_GRACE_MS, ROOM_CODE_ALPHABET, ROOM_CODE_LEN, ROOM_IDLE_MS, RoomConfig, RoomPhase,
     RoomSnapshot, ServerMsg, decode_client, nickname_key, normalize_nickname, normalize_room_code,
 };
-use room::{Kind, Phase, Player, Room, Score};
+use room::{Kind, Phase, Player, Room, RoundContent, Score};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Monotonic milliseconds, supplied by the caller.
@@ -195,6 +195,8 @@ impl Engine {
             Phase::Active(a) => Some(match &a.kind {
                 Kind::Course(c) => c.deadline,
                 Kind::Coop(c) => c.turn_deadline,
+                Kind::FlechesCourse(c) => c.deadline,
+                Kind::FlechesCoop(c) => c.turn_deadline,
             }),
         }
     }
@@ -309,6 +311,7 @@ impl Engine {
                     ClientMsg::UpdateConfig { config } => self.on_update_config(pid, config),
                     ClientMsg::StartMatch => self.on_start_match(now, pid, out),
                     ClientMsg::Guess { city } => self.on_guess(now, pid, &city, out),
+                    ClientMsg::Answer { option } => self.on_answer(now, pid, option, out),
                     ClientMsg::Hello { .. } | ClientMsg::Ping => Ok(()),
                 };
                 if let Err(code) = result {
@@ -455,6 +458,8 @@ impl Engine {
                 team_total: 0,
                 round_index: 0,
                 last_secret: None,
+                last_fleches: None,
+                seed: 0,
                 last_activity: now,
             },
         );
@@ -550,6 +555,9 @@ impl Engine {
         room.team_total = 0;
         room.round_index = 0;
         room.last_secret = None;
+        room.last_fleches = None;
+        // A fresh match seed: Flèches round *r* draws the question `seed + r`.
+        room.seed = self.entropy.next_u64();
         self.start_round(&code, now, out);
         Ok(())
     }
@@ -571,6 +579,26 @@ impl Engine {
             Phase::Active(_) => {}
         }
         self.guess(&code, pid, city, now, out)
+    }
+
+    /// The Flèches counterpart of [`Engine::on_guess`] (same phase checks, then `answer`).
+    fn on_answer(
+        &mut self,
+        now: Millis,
+        pid: PlayerId,
+        option: u8,
+        out: &mut Vec<Outbound>,
+    ) -> Result<(), ErrorCode> {
+        let code = self.players[&pid]
+            .room
+            .clone()
+            .ok_or(ErrorCode::InvalidState)?;
+        match self.rooms[&code].phase {
+            Phase::Lobby => return Err(ErrorCode::InvalidState),
+            Phase::Intermission(_) => return Err(ErrorCode::RoundOver),
+            Phase::Active(_) => {}
+        }
+        self.answer(&code, pid, option, now, out)
     }
 
     // ---- membership -------------------------------------------------------------------------
@@ -634,6 +662,11 @@ impl Engine {
             && let Kind::Course(c) = &mut a.kind
         {
             c.players.remove(&pid);
+        }
+        if let Phase::Active(a) = &mut room.phase
+            && let Kind::FlechesCourse(c) = &mut a.kind
+        {
+            c.answers.remove(&pid);
         }
         if room.members.is_empty() {
             self.rooms.remove(code);
@@ -753,13 +786,30 @@ impl Engine {
 
     // ---- diagnostics (tests and operators; never expose on the network) --------------------
 
-    /// Name of the secret city of the round in progress in `code`.
+    /// Name of the secret city of the Devinette round in progress in `code`
+    /// (`None` outside a round or in a Flèches round).
     ///
     /// For tests only: it is exactly what the protocol must never reveal early.
     #[doc(hidden)]
     pub fn debug_secret(&self, code: &str) -> Option<&'static str> {
         match &self.rooms.get(code)?.phase {
-            Phase::Active(a) => Some(a.secret.name),
+            Phase::Active(a) => match &a.content {
+                RoundContent::Devinette { secret } => Some(secret.name),
+                RoundContent::Fleches(_) => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The Flèches question of the round in progress in `code` (origin, target, options,
+    /// correct index, distance) — the values `round_ended` must reveal and nothing earlier.
+    #[doc(hidden)]
+    pub fn debug_fleches(&self, code: &str) -> Option<boussole_core::arrows::ArrowQuestion> {
+        match &self.rooms.get(code)?.phase {
+            Phase::Active(a) => match &a.content {
+                RoundContent::Fleches(question) => Some(question.clone()),
+                RoundContent::Devinette { .. } => None,
+            },
             _ => None,
         }
     }
@@ -802,24 +852,50 @@ impl Engine {
                     return Err(format!("room {code}: round 0 in a match"));
                 }
                 Phase::Intermission(_) => {}
-                Phase::Active(a) => match &a.kind {
-                    Kind::Course(c) => {
-                        let keys: Vec<_> = c.players.keys().copied().collect();
-                        let mut members = room.members.clone();
-                        members.sort_unstable();
-                        if keys != members {
-                            return Err(format!("room {code}: course states != members"));
+                Phase::Active(a) => {
+                    // The round's content must match its game-shaped state.
+                    let fleches = matches!(a.content, RoundContent::Fleches(_));
+                    let fleches_kind =
+                        matches!(a.kind, Kind::FlechesCourse(_) | Kind::FlechesCoop(_));
+                    if fleches != fleches_kind {
+                        return Err(format!("room {code}: content and kind disagree"));
+                    }
+                    match &a.kind {
+                        Kind::Course(c) => {
+                            let keys: Vec<_> = c.players.keys().copied().collect();
+                            let mut members = room.members.clone();
+                            members.sort_unstable();
+                            if keys != members {
+                                return Err(format!("room {code}: course states != members"));
+                            }
+                        }
+                        Kind::Coop(c) => {
+                            if !room.members.contains(&c.turn) {
+                                return Err(format!("room {code}: turn held by a non-member"));
+                            }
+                            if c.guessers.len() != c.round.guesses().len() {
+                                return Err(format!("room {code}: guessers out of sync"));
+                            }
+                        }
+                        Kind::FlechesCourse(c) => {
+                            let keys: Vec<_> = c.answers.keys().copied().collect();
+                            let mut members = room.members.clone();
+                            members.sort_unstable();
+                            if keys != members {
+                                return Err(format!(
+                                    "room {code}: fleches course answers != members"
+                                ));
+                            }
+                        }
+                        Kind::FlechesCoop(c) => {
+                            if !room.members.contains(&c.turn) {
+                                return Err(format!(
+                                    "room {code}: fleches answerer is not a member"
+                                ));
+                            }
                         }
                     }
-                    Kind::Coop(c) => {
-                        if !room.members.contains(&c.turn) {
-                            return Err(format!("room {code}: turn held by a non-member"));
-                        }
-                        if c.guessers.len() != c.round.guesses().len() {
-                            return Err(format!("room {code}: guessers out of sync"));
-                        }
-                    }
-                },
+                }
             }
         }
         for (id, p) in &self.players {

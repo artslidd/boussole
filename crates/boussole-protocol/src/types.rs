@@ -43,6 +43,22 @@ impl From<Difficulty> for boussole_core::game::Difficulty {
     }
 }
 
+/// The game played in a room (the room's `mode` — Course / Coopération — is orthogonal).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GameKind {
+    /// Guess the hidden city (the original game).
+    #[default]
+    Devinette,
+    /// Pick the arrow that points from the named origin to the named target.
+    Fleches,
+}
+
+/// `GameKind::Devinette`? (the serde skip rule that keeps old configs byte-identical).
+fn is_default_game(game: &GameKind) -> bool {
+    *game == GameKind::Devinette
+}
+
 /// Allowed `RoomConfig::rounds`.
 pub const ROUNDS_RANGE: RangeInclusive<u32> = 1..=10;
 /// Allowed `RoomConfig::max_players`.
@@ -51,6 +67,8 @@ pub const MAX_PLAYERS_RANGE: RangeInclusive<u32> = 2..=8;
 pub const ROUND_TIME_S_RANGE: RangeInclusive<u32> = 60..=300;
 /// Allowed `RoomConfig::turn_time_s` (Coopération).
 pub const TURN_TIME_S_RANGE: RangeInclusive<u32> = 15..=120;
+/// Allowed `RoomConfig::question_time_s` (Flèches).
+pub const QUESTION_TIME_S_RANGE: RangeInclusive<u32> = 5..=60;
 
 /// Room settings. Numbers are `u32` on the wire so that out-of-range values reach
 /// [`RoomConfig::validate`] (→ `invalid_config`); omitted numeric fields take their default.
@@ -58,6 +76,10 @@ pub const TURN_TIME_S_RANGE: RangeInclusive<u32> = 15..=120;
 pub struct RoomConfig {
     pub mode: Mode,
     pub difficulty: Difficulty,
+    /// Which game the room plays (default, and therefore **omitted on the wire**:
+    /// a config without `game` is a Devinette room).
+    #[serde(default, skip_serializing_if = "is_default_game")]
+    pub game: GameKind,
     /// Rounds per match, 1–10 (default 5).
     #[serde(default = "default_rounds")]
     pub rounds: u32,
@@ -70,6 +92,13 @@ pub struct RoomConfig {
     /// Coopération: seconds per turn, 15–120 (default 45).
     #[serde(default = "default_turn_time_s")]
     pub turn_time_s: u32,
+    /// Flèches: seconds per question, 5–60 (default 15). Omitted on the wire when 15
+    /// (the default), so a Devinette config stays byte-identical to protocol 1.
+    #[serde(
+        default = "default_question_time_s",
+        skip_serializing_if = "is_default_question_time_s"
+    )]
+    pub question_time_s: u32,
 }
 
 fn default_rounds() -> u32 {
@@ -84,6 +113,12 @@ fn default_round_time_s() -> u32 {
 fn default_turn_time_s() -> u32 {
     45
 }
+fn default_question_time_s() -> u32 {
+    15
+}
+fn is_default_question_time_s(s: &u32) -> bool {
+    *s == default_question_time_s()
+}
 
 impl RoomConfig {
     /// A valid configuration with the default numbers.
@@ -91,20 +126,23 @@ impl RoomConfig {
         Self {
             mode,
             difficulty,
+            game: GameKind::Devinette,
             rounds: default_rounds(),
             max_players: default_max_players(),
             round_time_s: default_round_time_s(),
             turn_time_s: default_turn_time_s(),
+            question_time_s: default_question_time_s(),
         }
     }
 
-    /// `Err(InvalidConfig)` when any number is outside its range (both time limits are
-    /// checked whatever the mode).
+    /// `Err(InvalidConfig)` when any number is outside its range (all time limits are
+    /// checked whatever the mode or game).
     pub fn validate(&self) -> Result<(), ErrorCode> {
         let ok = ROUNDS_RANGE.contains(&self.rounds)
             && MAX_PLAYERS_RANGE.contains(&self.max_players)
             && ROUND_TIME_S_RANGE.contains(&self.round_time_s)
-            && TURN_TIME_S_RANGE.contains(&self.turn_time_s);
+            && TURN_TIME_S_RANGE.contains(&self.turn_time_s)
+            && QUESTION_TIME_S_RANGE.contains(&self.question_time_s);
         if ok {
             Ok(())
         } else {
@@ -147,6 +185,19 @@ pub struct HintDto {
     /// Rounded kilometres. Present **only** in `facile`; in `difficile` the key is omitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub distance_km: Option<u32>,
+}
+
+/// One Flèches question, as sent in `round_started` (and in the `round` of a snapshot).
+/// It carries **no** correct index and **no** distance: both are revealed by `round_ended`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FlechesQuestion {
+    /// Start city, at the centre of the dial.
+    pub origin: String,
+    /// City to aim at, named in the question ("De Lyon vers Brest ?").
+    pub target: String,
+    /// The four option bearings in display order, degrees clockwise from north, 0.1°
+    /// precision, each in `[0, 360)`.
+    pub options_deg: [f64; 4],
 }
 
 /// A player as listed in a room.
@@ -208,16 +259,22 @@ pub enum Timer {
     },
 }
 
-/// Opening of a round.
+/// Opening of a round. A Devinette round carries `max_tries` and `hints`; a Flèches round
+/// carries `question` instead. The other game's fields are **absent** (never `null`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RoundStarted {
     /// 1-based.
     pub round_index: u8,
     pub total_rounds: u8,
-    /// Always 6.
-    pub max_tries: u8,
-    /// Five arrow targets sorted by bearing. Never contains the secret.
-    pub hints: Vec<HintDto>,
+    /// Devinette only: the try limit (always 6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tries: Option<u8>,
+    /// Devinette only: five arrow targets sorted by bearing; never contains the secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hints: Option<Vec<HintDto>>,
+    /// Flèches only: the question (origin, target, the four option bearings).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<FlechesQuestion>,
     pub timer: Timer,
 }
 
@@ -226,10 +283,15 @@ pub struct RoundStarted {
 pub struct RoundView {
     /// The `round_started` data, with `timer` updated to the current remaining time.
     pub start: RoundStarted,
-    /// Course: the receiver's own guesses. Coopération: the team's guesses, in order.
+    /// Devinette: the receiver's own guesses (Course) or the team's (Coopération).
+    /// Flèches: always empty (nothing may be revealed before `round_ended`).
     pub guesses: Vec<GuessInfo>,
-    /// Course: one entry per player (including the receiver). Coopération: empty.
+    /// Devinette Course: one entry per player (including the receiver). Otherwise empty.
     pub progress: Vec<Progress>,
+    /// Flèches Course: the players who already answered this question, in join order.
+    /// Absent in Devinette and in Flèches Coopération.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered: Option<Vec<PlayerId>>,
 }
 
 /// One guess as revealed at the end of the round.
@@ -254,18 +316,54 @@ pub struct PlayerRoundResult {
     pub total: u32,
 }
 
-/// Close of a round: the secret and everybody's guesses.
+/// One Flèches answer as revealed at the end of the round.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlechesAnswer {
+    pub player_id: PlayerId,
+    /// The chosen option index (0–3); **absent** when the player did not answer in time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option: Option<u8>,
+    /// Whether `option` is the correct arrow (`false` when there was no answer).
+    pub correct: bool,
+    /// Course: the player's points for the round. Coopération: the team's points.
+    pub points: u32,
+    /// Match total after this round (Coopération: the team total).
+    pub total: u32,
+}
+
+/// The Flèches reveal carried by `round_ended`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlechesReveal {
+    /// Index (0–3) in `options_deg` of the correct arrow.
+    pub correct: u8,
+    /// Distance origin → target, whole kilometres.
+    pub distance_km: u32,
+    /// Compass direction of the correct arrow (`Compass8::label_fr`: "N", "NE", … "NO").
+    pub compass: String,
+    /// One entry per player present at the end of the round, in join order.
+    pub answers: Vec<FlechesAnswer>,
+}
+
+/// Close of a round: the reveal and everybody's answers or guesses. A Devinette round
+/// carries `secret` and `results`; a Flèches round carries `fleches`. The other game's
+/// fields are **absent** (never `null`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RoundEnded {
     pub round_index: u8,
     pub total_rounds: u8,
-    /// Name of the secret city.
-    pub secret: String,
-    /// Coopération: the player who found it (`None` if lost). Always `None` in Course.
+    /// Devinette only: name of the secret city.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+    /// Coopération (both games): the player who found it / made the winning answer.
+    /// Always absent in Course.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub found_by: Option<PlayerId>,
-    /// One entry per player present at the end of the round, in join order.
-    pub results: Vec<PlayerRoundResult>,
+    /// Devinette only: one entry per player present at the end of the round, in join order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub results: Option<Vec<PlayerRoundResult>>,
+    /// Flèches only: the correct arrow, the distance, the compass and each player's answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fleches: Option<FlechesReveal>,
     /// Milliseconds until the next round starts; `None` after the last round.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_round_in_ms: Option<u64>,
@@ -318,7 +416,8 @@ pub struct RankEntry {
     /// Competition ranking (1, 1, 3): 1 + number of players with a strictly higher total.
     /// Coopération: everyone is 1.
     pub rank: u32,
-    /// Rounds this player solved (Coopération: rounds in which they made the winning guess).
+    /// Rounds this player solved (Coopération: rounds in which they made the winning move —
+    /// in Flèches, the correct answer).
     pub solved_rounds: u32,
 }
 

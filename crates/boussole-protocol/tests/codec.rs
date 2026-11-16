@@ -134,14 +134,55 @@ fn omitted_config_numbers_take_their_defaults() {
     );
     assert_eq!(
         (
+            config.game,
             config.rounds,
             config.max_players,
             config.round_time_s,
-            config.turn_time_s
+            config.turn_time_s,
+            config.question_time_s
         ),
-        (5, 8, 120, 45)
+        (GameKind::Devinette, 5, 8, 120, 45, 15)
     );
     assert_eq!(config.validate(), Ok(()));
+}
+
+#[test]
+fn a_config_without_game_is_a_devinette_room_and_devinette_bytes_are_unchanged() {
+    // A protocol-1 room config (no `game`, no `question_time_s`) still parses, as Devinette.
+    let old = r#"{"mode":"course","difficulty":"facile","rounds":3,"max_players":4,"round_time_s":90,"turn_time_s":45}"#;
+    let config: RoomConfig = serde_json::from_str(old).unwrap();
+    assert_eq!(config.game, GameKind::Devinette);
+    assert_eq!(config.question_time_s, 15);
+    assert_eq!(
+        config,
+        RoomConfig {
+            rounds: 3,
+            max_players: 4,
+            round_time_s: 90,
+            ..RoomConfig::new(Mode::Course, Difficulty::Facile)
+        }
+    );
+    // A default Devinette config serialises exactly as protocol 1 did (no new keys).
+    let json = serde_json::to_string(&RoomConfig::new(Mode::Course, Difficulty::Facile)).unwrap();
+    assert_eq!(
+        json,
+        r#"{"mode":"course","difficulty":"facile","rounds":5,"max_players":8,"round_time_s":120,"turn_time_s":45}"#
+    );
+    // A Flèches config carries both new keys.
+    let json = serde_json::to_string(&RoomConfig {
+        game: GameKind::Fleches,
+        question_time_s: 30,
+        ..RoomConfig::new(Mode::Course, Difficulty::Difficile)
+    })
+    .unwrap();
+    assert!(json.contains("\"game\":\"fleches\""));
+    assert!(json.contains("\"question_time_s\":30"));
+    assert!(
+        serde_json::from_str::<RoomConfig>(&json)
+            .unwrap()
+            .validate()
+            .is_ok()
+    );
 }
 
 #[test]
@@ -171,6 +212,22 @@ fn config_ranges_are_inclusive() {
     assert_eq!(with(|c| c.turn_time_s = 120), Ok(()));
     assert_eq!(with(|c| c.turn_time_s = 14), Err(ErrorCode::InvalidConfig));
     assert_eq!(with(|c| c.turn_time_s = 121), Err(ErrorCode::InvalidConfig));
+    assert_eq!(with(|c| c.question_time_s = 5), Ok(()));
+    assert_eq!(with(|c| c.question_time_s = 60), Ok(()));
+    assert_eq!(
+        with(|c| c.question_time_s = 4),
+        Err(ErrorCode::InvalidConfig)
+    );
+    assert_eq!(
+        with(|c| c.question_time_s = 61),
+        Err(ErrorCode::InvalidConfig)
+    );
+    // The game does not loosen the checks: every number is validated whatever the game.
+    let mut fleches = RoomConfig::new(Mode::Cooperation, Difficulty::Difficile);
+    fleches.game = GameKind::Fleches;
+    assert_eq!(fleches.validate(), Ok(()));
+    fleches.turn_time_s = 14;
+    assert_eq!(fleches.validate(), Err(ErrorCode::InvalidConfig));
 }
 
 #[test]
@@ -228,6 +285,7 @@ fn every_error_code_has_a_distinct_french_message_and_a_snake_case_name() {
             "not_your_turn",
             "unknown_city",
             "already_guessed",
+            "invalid_option",
             "round_over",
             "rate_limited",
         ]
@@ -263,6 +321,7 @@ fn every_error_code_has_a_distinct_french_message_and_a_snake_case_name() {
             | ErrorCode::NotYourTurn
             | ErrorCode::UnknownCity
             | ErrorCode::AlreadyGuessed
+            | ErrorCode::InvalidOption
             | ErrorCode::RoundOver
             | ErrorCode::RateLimited => {}
         }
@@ -303,21 +362,55 @@ fn realistic_worst_case_server_frames_fit_the_client_cap() {
     let ended = RoundEnded {
         round_index: 10,
         total_rounds: 10,
-        secret: "Châlons-en-Champagne".into(),
+        secret: Some("Châlons-en-Champagne".into()),
         found_by: Some(8),
-        results: (1..=8)
-            .map(|id| PlayerRoundResult {
-                player_id: id,
-                guesses: (0..6).map(|_| entry()).collect(),
-                solved: false,
-                tries_used: 6,
-                points: 0,
-                total: 6990,
-            })
-            .collect(),
+        results: Some(
+            (1..=8)
+                .map(|id| PlayerRoundResult {
+                    player_id: id,
+                    guesses: (0..6).map(|_| entry()).collect(),
+                    solved: false,
+                    tries_used: 6,
+                    points: 0,
+                    total: 6990,
+                })
+                .collect(),
+        ),
+        fleches: None,
         next_round_in_ms: Some(8000),
     };
     let frame = encode(&ServerMsg::RoundEnded(ended));
+    assert!(
+        frame.len() < MAX_SERVER_FRAME_BYTES / 4,
+        "{} bytes",
+        frame.len()
+    );
+
+    // The Flèches worst case: a reveal for 8 players (long names live in players, not here,
+    // but keep the check alongside).
+    let reveal = FlechesReveal {
+        correct: 3,
+        distance_km: 1000,
+        compass: "NO".into(),
+        answers: (1..=8)
+            .map(|id| FlechesAnswer {
+                player_id: id,
+                option: Some(3),
+                correct: true,
+                points: 150,
+                total: 1500,
+            })
+            .collect(),
+    };
+    let frame = encode(&ServerMsg::RoundEnded(RoundEnded {
+        round_index: 10,
+        total_rounds: 10,
+        secret: None,
+        found_by: None,
+        results: None,
+        fleches: Some(reveal),
+        next_round_in_ms: Some(8000),
+    }));
     assert!(
         frame.len() < MAX_SERVER_FRAME_BYTES / 4,
         "{} bytes",

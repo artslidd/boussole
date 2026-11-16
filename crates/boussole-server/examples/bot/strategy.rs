@@ -1,11 +1,13 @@
 //! How the bot guesses: keep every city that is consistent with the feedback so far (the
 //! distance and bearing from each guess to the secret pin the secret down almost at once)
-//! and pick one of them at random. Shared by the bot example and the integration tests.
+//! and pick one of them at random. For Flèches, the correct arrow is recomputed from the
+//! dataset and picked with a probability given by the `--skill` knob. Shared by the bot
+//! example and the integration tests.
 
 use boussole_core::cities::{CITIES, City};
 use boussole_core::geo::{bearing_deg, distance_km};
 use boussole_core::search::find_exact;
-use boussole_protocol::GuessInfo;
+use boussole_protocol::{FLECHES_OPTIONS, FlechesQuestion, GuessInfo};
 
 pub struct Strategy {
     candidates: Vec<&'static City>,
@@ -54,6 +56,29 @@ impl Strategy {
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
     }
+
+    /// Answer a Flèches question: find the option that matches the true bearing
+    /// origin → target and pick it with probability `skill` % (`--skill` knob);
+    /// otherwise pick one of the other arrows at random.
+    pub fn answer_fleches(&mut self, question: &FlechesQuestion, skill: u32) -> u8 {
+        let correct = fleches_correct_option(question).unwrap_or(0);
+        if self.next_u64() % 100 < u64::from(skill.min(100)) {
+            return correct;
+        }
+        let wrong: Vec<u8> = (0..FLECHES_OPTIONS).filter(|&i| i != correct).collect();
+        wrong[(self.next_u64() % wrong.len() as u64) as usize]
+    }
+}
+
+/// The option index whose bearing points from `question.origin` to `question.target`
+/// (the server rounds the true bearing to 0.1° on the wire; so does this lookup), or `None`
+/// if no option matches (cannot happen with the built-in dataset).
+pub fn fleches_correct_option(question: &FlechesQuestion) -> Option<u8> {
+    let origin = find_exact(&question.origin)?;
+    let target = find_exact(&question.target)?;
+    let true_deg = bearing_deg(origin, target);
+    (0..FLECHES_OPTIONS)
+        .find(|&i| angle_diff(question.options_deg[usize::from(i)], true_deg) <= 0.11)
 }
 
 /// Smallest angle between two bearings, in degrees.

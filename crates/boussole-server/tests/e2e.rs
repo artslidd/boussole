@@ -147,12 +147,17 @@ async fn create_join_and_start_with_the_usual_refusals() {
             (
                 started.round_index,
                 started.total_rounds,
-                started.hints.len()
+                started.hints.as_ref().unwrap().len()
             ),
             (1, 2, 5)
         );
         assert!(
-            started.hints.iter().all(|h| h.distance_km.is_some()),
+            started
+                .hints
+                .as_ref()
+                .unwrap()
+                .iter()
+                .all(|h| h.distance_km.is_some()),
             "facile shows km"
         );
     }
@@ -208,12 +213,13 @@ async fn course_match_with_three_clients_and_two_rounds() {
     assert_same_view(&played, 2);
 
     // Difficile: no hint carried a distance.
-    assert!(
-        played[0]
-            .started
+    assert!(played[0].started.iter().all(|r| {
+        r.hints
+            .as_ref()
+            .unwrap()
             .iter()
-            .all(|r| r.hints.iter().all(|h| h.distance_km.is_none()))
-    );
+            .all(|h| h.distance_km.is_none())
+    }));
     // Different secret in the two rounds, and every player's result is consistent.
     assert_ne!(played[0].rounds[0].secret, played[0].rounds[1].secret);
     for (idx, p) in played.iter().enumerate() {
@@ -221,6 +227,8 @@ async fn course_match_with_three_clients_and_two_rounds() {
             let me = clients[idx].id;
             let mine = ended
                 .results
+                .as_ref()
+                .unwrap()
                 .iter()
                 .find(|x| x.player_id == me)
                 .expect("own result");
@@ -243,6 +251,8 @@ async fn course_match_with_three_clients_and_two_rounds() {
     for entry in ranking {
         let total = last
             .results
+            .as_ref()
+            .unwrap()
             .iter()
             .find(|r| r.player_id == entry.player_id)
             .unwrap()
@@ -306,7 +316,12 @@ async fn coop_match_with_three_clients_and_two_rounds() {
         let solved = played[0].guesses[r].last().is_some_and(|g| g.correct);
         let team_points = if solved { 100 * (7 - tries as u32) } else { 0 };
         assert!(
-            ended.results.iter().all(|x| x.points == team_points),
+            ended
+                .results
+                .as_ref()
+                .unwrap()
+                .iter()
+                .all(|x| x.points == team_points),
             "{ended:?}"
         );
         assert_eq!(ended.found_by.is_some(), solved);
@@ -314,7 +329,11 @@ async fn coop_match_with_three_clients_and_two_rounds() {
     let ranking = &played[0].match_ended.ranking;
     assert_eq!(played[0].match_ended.mode, Mode::Cooperation);
     assert!(ranking.iter().all(|r| r.rank == 1), "one team, one rank");
-    let team_total: u32 = played[0].rounds.iter().map(|e| e.results[0].points).sum();
+    let team_total: u32 = played[0]
+        .rounds
+        .iter()
+        .map(|e| e.results.as_ref().unwrap()[0].points)
+        .sum();
     assert!(ranking.iter().all(|r| r.total == team_total));
     assert!(team_total > 0, "a team with feedback finds the city");
     server.shutdown().await;

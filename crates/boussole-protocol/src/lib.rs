@@ -17,7 +17,8 @@ pub use msg::{ClientMsg, ServerMsg};
 pub use types::*;
 
 /// Protocol revision. Bumped on any change a version-1 peer could not understand.
-pub const PROTOCOL_VERSION: u16 = 1;
+/// Version 2 added the Flèches game (rooms, questions, answers, reveals).
+pub const PROTOCOL_VERSION: u16 = 2;
 
 /// Largest client → server frame, in bytes. Longer frames are rejected with `bad_message`
 /// (the transport also closes the connection).
@@ -29,6 +30,10 @@ pub const MAX_SERVER_FRAME_BYTES: usize = 65_536;
 
 /// Tries per round (`boussole_core::game::Round::MAX_GUESSES`).
 pub const MAX_TRIES: u8 = 6;
+
+/// Number of options (arrows) in a Flèches question
+/// (`boussole_core::arrows::OPTION_COUNT`).
+pub const FLECHES_OPTIONS: u8 = 4;
 
 /// Room codes: 5 characters from this alphabet (no `I`, `O`, `0`, `1`).
 pub const ROOM_CODE_ALPHABET: &str = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";

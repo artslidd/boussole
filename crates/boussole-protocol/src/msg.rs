@@ -32,8 +32,14 @@ pub enum ClientMsg {
     /// Host only, lobby only.
     StartMatch,
     /// Guess a city by its exact name (as in `boussole_core::cities::CITIES`).
+    /// Devinette only.
     Guess {
         city: String,
+    },
+    /// Answer the current Flèches question by picking an option index (0–3).
+    /// Flèches only.
+    Answer {
+        option: u8,
     },
     Ping,
 }
@@ -51,6 +57,9 @@ impl ClientMsg {
 }
 
 /// Server → client messages.
+// A `room_snapshot` embeds the whole room; messages are encoded and sent as they are
+// produced and never stored in bulk, so the size difference between variants is fine.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMsg {
@@ -68,6 +77,11 @@ pub enum ServerMsg {
     GuessResult(GuessInfo),
     /// Course: to everyone except the guesser.
     PlayerProgress(Progress),
+    /// Flèches Course: broadcast (guesser included) after each accepted answer, so everyone
+    /// can see who has answered. Carries **no** option and no correctness.
+    PlayerAnswered {
+        player_id: PlayerId,
+    },
     /// Coopération only.
     TurnChanged {
         player_id: PlayerId,

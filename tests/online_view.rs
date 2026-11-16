@@ -93,11 +93,13 @@ fn started(mut state: OnlineState, start: ServerMsg, t: &T) -> OnlineState {
         phase: RoomPhase::RoundActive,
         players: room.players,
         round: Some(boussole_protocol::RoundView {
+            answered: None,
             start: boussole_protocol::RoundStarted {
                 round_index: round.index,
                 total_rounds: round.total,
-                max_tries: round.max_tries,
-                hints: round.hints,
+                max_tries: Some(round.max_tries),
+                hints: Some(round.hints),
+                question: None,
                 timer: match round.clock {
                     boussole::online::Clock::Round { .. } => Timer::Round {
                         remaining_ms: 90_000,
@@ -818,9 +820,11 @@ fn a_lost_coop_round_has_no_finder() {
         _ => unreachable!(),
     };
     ended.found_by = None;
-    for r in &mut ended.results {
-        r.solved = false;
-        r.points = 0;
+    if let Some(results) = &mut ended.results {
+        for r in results {
+            r.solved = false;
+            r.points = 0;
+        }
     }
     state = apply(
         state,

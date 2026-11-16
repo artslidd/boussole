@@ -199,7 +199,7 @@ fn an_intermission_snapshot_shows_the_last_result_and_the_countdown_to_the_next_
     assert_eq!(room.phase, RoomPhase::Intermission);
     assert!(room.round.is_none());
     let result = room.result.as_ref().expect("last round result");
-    assert_eq!(result.ended.secret, "Besançon");
+    assert_eq!(result.ended.secret.as_deref(), Some("Besançon"));
     assert_eq!(
         result.next_at.map(|at| at.duration_since(c.t(0))),
         Some(Duration::from_millis(5_500))
@@ -295,7 +295,7 @@ fn a_whole_course_round_from_the_first_guess_to_the_intermission() {
     s = apply(s, fixture!("round_ended_course"), c.t(6_000));
     let room = s.room.as_ref().unwrap();
     let result = room.result.as_ref().unwrap();
-    assert_eq!(result.ended.secret, "Besançon");
+    assert_eq!(result.ended.secret.as_deref(), Some("Besançon"));
     assert_eq!(
         result.hints.len(),
         5,
@@ -508,6 +508,7 @@ fn every_server_message_variant_is_accepted_without_panicking_in_any_state() {
             ServerMsg::RoundStarted(_) => "round_started",
             ServerMsg::GuessResult(_) => "guess_result",
             ServerMsg::PlayerProgress(_) => "player_progress",
+            ServerMsg::PlayerAnswered { .. } => "player_answered",
             ServerMsg::TurnChanged { .. } => "turn_changed",
             ServerMsg::RoundEnded(_) => "round_ended",
             ServerMsg::MatchEnded(_) => "match_ended",
@@ -525,6 +526,7 @@ fn every_server_message_variant_is_accepted_without_panicking_in_any_state() {
         fixture!("round_started_coop_difficile"),
         fixture!("guess_result"),
         fixture!("player_progress"),
+        fixture!("player_answered"),
         fixture!("turn_changed"),
         fixture!("round_ended_course"),
         fixture!("round_ended_coop"),
@@ -535,7 +537,7 @@ fn every_server_message_variant_is_accepted_without_panicking_in_any_state() {
     let mut kinds: Vec<_> = all.iter().map(kind).collect();
     kinds.sort_unstable();
     kinds.dedup();
-    assert_eq!(kinds.len(), 10, "every variant has a fixture: {kinds:?}");
+    assert_eq!(kinds.len(), 11, "every variant has a fixture: {kinds:?}");
 
     // Every message after every other one, from an empty state: never a panic.
     let c = Clockwork::new();

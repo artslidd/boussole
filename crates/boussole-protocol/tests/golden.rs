@@ -76,6 +76,7 @@ fn client_type(msg: &ClientMsg) -> &'static str {
         ClientMsg::UpdateConfig { .. } => "update_config",
         ClientMsg::StartMatch => "start_match",
         ClientMsg::Guess { .. } => "guess",
+        ClientMsg::Answer { .. } => "answer",
         ClientMsg::Ping => "ping",
     }
 }
@@ -87,6 +88,7 @@ fn server_type(msg: &ServerMsg) -> &'static str {
         ServerMsg::RoundStarted(_) => "round_started",
         ServerMsg::GuessResult(_) => "guess_result",
         ServerMsg::PlayerProgress(_) => "player_progress",
+        ServerMsg::PlayerAnswered { .. } => "player_answered",
         ServerMsg::TurnChanged { .. } => "turn_changed",
         ServerMsg::RoundEnded(_) => "round_ended",
         ServerMsg::MatchEnded(_) => "match_ended",
@@ -106,6 +108,7 @@ fn every_variant_has_a_fixture_and_the_tag_is_the_snake_case_name() {
     assert_eq!(
         seen,
         [
+            "answer",
             "create_room",
             "guess",
             "hello",
@@ -128,6 +131,7 @@ fn every_variant_has_a_fixture_and_the_tag_is_the_snake_case_name() {
             "error",
             "guess_result",
             "match_ended",
+            "player_answered",
             "player_progress",
             "pong",
             "room_snapshot",

@@ -181,7 +181,9 @@ cargo run --release -p boussole-server --example bot -- --url ws://192.168.1.26:
 cargo run --release -p boussole-server --example bot -- --url ws://192.168.1.26:7878/ws --room K7QX2 --nickname Bob
 ```
 
-`--mode coop` plays Coopération; `--help` lists the other flags.
+`--mode coop` plays Coopération; `--game fleches` plays the Flèches arrow game (with
+`--skill 0..100`, the probability that a bot picks the right arrow); `--help` lists the
+other flags.
 
 ## 2. Docker / Podman, single container
 

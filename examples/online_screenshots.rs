@@ -177,8 +177,9 @@ fn start(round_index: u8, difficulty: Difficulty, timer: Timer) -> RoundStarted 
     RoundStarted {
         round_index,
         total_rounds: 5,
-        max_tries: 6,
-        hints: hints(difficulty == Difficulty::Facile),
+        max_tries: Some(6),
+        hints: Some(hints(difficulty == Difficulty::Facile)),
+        question: None,
         timer,
     }
 }
@@ -222,6 +223,7 @@ fn round(
             start,
             guesses,
             progress,
+            answered: None,
         }),
         intermission: None,
     }));
@@ -510,9 +512,10 @@ fn main() -> Result<()> {
     s.send(ServerMsg::RoundEnded(RoundEnded {
         round_index: 2,
         total_rounds: 5,
-        secret: "Besançon".into(),
+        secret: Some("Besançon".into()),
         found_by: None,
-        results,
+        results: Some(results),
+        fleches: None,
         next_round_in_ms: Some(8_000),
     }));
     s.elapse(Duration::from_millis(2_000));

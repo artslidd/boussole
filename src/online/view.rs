@@ -5,7 +5,7 @@ use super::state::{Clock, Link, OnlineState, Room, RoundResult};
 use crate::board::{HintLabel, format_dto_label};
 use boussole_protocol::{
     Difficulty, GuessInfo, HintDto, MAX_PLAYERS_RANGE, MatchEnded, Mode, PlayerId,
-    ROUND_TIME_S_RANGE, ROUNDS_RANGE, RoomConfig, RoomPhase, TURN_TIME_S_RANGE,
+    PlayerRoundResult, ROUND_TIME_S_RANGE, ROUNDS_RANGE, RoomConfig, RoomPhase, TURN_TIME_S_RANGE,
 };
 use std::time::{Duration, Instant};
 
@@ -591,9 +591,12 @@ pub fn result(state: &OnlineState, now: Instant) -> Option<ResultView> {
     let ended = &result.ended;
     let me = state.me;
     let coop = room.config.mode == Mode::Cooperation;
+    // Flèche rooms carry their reveal in `ended.fleches` instead; the client learns to show
+    // it in ticket 10. Until then a Flèche round just renders empty here (no panic).
+    let results: &[PlayerRoundResult] = ended.results.as_deref().unwrap_or(&[]);
+    let secret = ended.secret.as_deref().unwrap_or("");
 
-    let mut rows: Vec<ResultRow> = ended
-        .results
+    let mut rows: Vec<ResultRow> = results
         .iter()
         .map(|r| {
             let name = name_of(room, r.player_id);
@@ -645,20 +648,20 @@ pub fn result(state: &OnlineState, now: Instant) -> Option<ResultView> {
         rows.sort_by_key(|r| std::cmp::Reverse(r.points)); // stable: ties keep join order
     }
 
-    let team_points = coop.then(|| ended.results.first().map_or(0, |r| r.points));
+    let team_points = coop.then(|| results.first().map_or(0, |r| r.points));
     let headline = if coop {
         match ended.found_by {
-            Some(id) => format!("{} a trouvé {} !", name_of(room, id), ended.secret),
-            None => format!("Perdu ! C’était {}.", ended.secret),
+            Some(id) => format!("{} a trouvé {} !", name_of(room, id), secret),
+            None => format!("Perdu ! C’était {}.", secret),
         }
     } else {
-        match ended.results.iter().find(|r| Some(r.player_id) == me) {
+        match results.iter().find(|r| Some(r.player_id) == me) {
             Some(r) if r.solved => format!(
                 "Bravo ! C’était {} en {}.",
-                ended.secret,
+                secret,
                 plural(u32::from(r.tries_used), "essai", "essais")
             ),
-            _ => format!("C’était {}.", ended.secret),
+            _ => format!("C’était {}.", secret),
         }
     };
 
@@ -684,7 +687,7 @@ pub fn result(state: &OnlineState, now: Instant) -> Option<ResultView> {
     Some(ResultView {
         mode: room.config.mode,
         difficulty: room.config.difficulty,
-        secret: ended.secret.clone(),
+        secret: secret.to_owned(),
         round_label: format!("Manche {} sur {}", ended.round_index, ended.total_rounds),
         last_round,
         headline,

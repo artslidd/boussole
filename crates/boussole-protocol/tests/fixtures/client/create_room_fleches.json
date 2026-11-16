@@ -1,0 +1,1 @@
+{"type":"create_room","config":{"mode":"course","difficulty":"facile","game":"fleches","rounds":3,"max_players":4,"round_time_s":90,"turn_time_s":45,"question_time_s":30}}

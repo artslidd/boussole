@@ -75,7 +75,7 @@ fn resuming_mid_round_restores_the_round_state_for_that_player() {
     assert_eq!(snap.phase, RoomPhase::RoundActive);
     let round = snap.round.expect("round state");
     assert_eq!(round.start.round_index, 1);
-    assert_eq!(round.start.hints.len(), 5);
+    assert_eq!(round.start.hints.as_ref().unwrap().len(), 5);
     assert_eq!(
         round.start.timer,
         Timer::Round {
@@ -144,7 +144,7 @@ fn resuming_during_an_intermission_includes_the_round_that_just_ended() {
     let pause = snap.intermission.unwrap();
     assert_eq!(pause.next_round_index, 2);
     assert_eq!(pause.remaining_ms, INTERMISSION_MS - 3_000);
-    assert_eq!(pause.last_round.secret, secret);
+    assert_eq!(pause.last_round.secret.as_deref(), Some(secret));
     assert_eq!(pause.last_round.next_round_in_ms, Some(pause.remaining_ms));
 }
 

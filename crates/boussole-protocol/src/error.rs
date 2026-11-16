@@ -20,13 +20,15 @@ pub enum ErrorCode {
     NotYourTurn,
     UnknownCity,
     AlreadyGuessed,
+    /// Flèches `answer` with an option index outside 0–3.
+    InvalidOption,
     RoundOver,
     RateLimited,
 }
 
 impl ErrorCode {
     /// Every code, in wire order.
-    pub const ALL: [ErrorCode; 17] = [
+    pub const ALL: [ErrorCode; 18] = [
         Self::BadVersion,
         Self::DatasetMismatch,
         Self::BadMessage,
@@ -42,6 +44,7 @@ impl ErrorCode {
         Self::NotYourTurn,
         Self::UnknownCity,
         Self::AlreadyGuessed,
+        Self::InvalidOption,
         Self::RoundOver,
         Self::RateLimited,
     ];
@@ -68,6 +71,7 @@ impl ErrorCode {
             Self::NotYourTurn => "Ce n’est pas votre tour.",
             Self::UnknownCity => "Ville inconnue.",
             Self::AlreadyGuessed => "Cette ville a déjà été proposée.",
+            Self::InvalidOption => "Flèche invalide : choisissez entre 1 et 4.",
             Self::RoundOver => "La manche est terminée.",
             Self::RateLimited => "Trop de messages : ralentissez.",
         }
